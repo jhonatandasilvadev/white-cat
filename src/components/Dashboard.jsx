@@ -11,6 +11,10 @@ import {
   HStack,
   IconButton,
   Input,
+  Menu,
+  MenuButton,
+  MenuItem,
+  MenuList,
   Modal,
   ModalBody,
   ModalCloseButton,
@@ -58,7 +62,7 @@ import {
   STATUSES,
   STATUS_LABELS,
 } from "../lib/finance.js";
-import { getExpenses, getSalary, saveExpenses, saveSalary } from "../lib/storage.js";
+import { getExpenses, getSalary, getUsers, migrateFinanceKeys, saveExpenses, saveSalary, saveUsers, setLoggedUser } from "../lib/storage.js";
 import { seedAprilIfNeeded } from "../lib/migrateLegacy.js";
 
 const emptyForm = {
@@ -72,7 +76,7 @@ const emptyForm = {
   note: "",
 };
 
-export default function Dashboard({ user, onLogout }) {
+export default function Dashboard({ user, onUserUpdate, onLogout }) {
   const { colorMode, toggleColorMode } = useColorMode();
   const mutedText = useColorModeValue("gray.600", "gray.300");
   const softText = useColorModeValue("gray.500", "gray.400");
@@ -85,7 +89,9 @@ export default function Dashboard({ user, onLogout }) {
   const [form, setForm] = useState(emptyForm);
   const [editingId, setEditingId] = useState(null);
   const [sortMode, setSortMode] = useState("dueDate");
+  const [profileForm, setProfileForm] = useState({ email: user.email, password: user.password || "" });
   const expenseModal = useDisclosure();
+  const profileModal = useDisclosure();
 
   const currentYear = brasiliaNow.getFullYear();
   const currentMonth = brasiliaNow.getMonth() + 1;
@@ -106,6 +112,10 @@ export default function Dashboard({ user, onLogout }) {
     setEditingId(null);
     setForm(emptyForm);
   }, [selected, user.email]);
+
+  useEffect(() => {
+    setProfileForm({ email: user.email, password: user.password || "" });
+  }, [user]);
 
   const summary = useMemo(() => calculateSummary(salary, expenses), [salary, expenses]);
   const totalDebtBalance = useMemo(
@@ -153,6 +163,39 @@ export default function Dashboard({ user, onLogout }) {
   function persistSalary(value) {
     setSalary(Number(value || 0));
     saveSalary(user.email, selected.year, selected.month, Number(value || 0));
+  }
+
+  function handleProfileSubmit(event) {
+    event.preventDefault();
+    const nextEmail = profileForm.email.trim();
+    const nextPassword = profileForm.password;
+
+    if (!nextEmail || !nextPassword) {
+      notify({ status: "warning", title: "Preencha os dados", description: "Login e senha são obrigatórios." });
+      return;
+    }
+
+    const users = getUsers();
+    const emailTaken = users.some((savedUser) => savedUser.email === nextEmail && savedUser.email !== user.email);
+
+    if (emailTaken) {
+      notify({ status: "warning", title: "Login já existe", description: "Escolha outro login para continuar." });
+      return;
+    }
+
+    const nextUser = { email: nextEmail, password: nextPassword };
+    const nextUsers = users.map((savedUser) => (savedUser.email === user.email ? nextUser : savedUser));
+
+    if (!nextUsers.some((savedUser) => savedUser.email === nextEmail)) {
+      nextUsers.push(nextUser);
+    }
+
+    migrateFinanceKeys(user.email, nextEmail);
+    saveUsers(nextUsers);
+    setLoggedUser(nextUser);
+    onUserUpdate(nextUser);
+    profileModal.onClose();
+    notify({ status: "success", title: "Perfil atualizado", description: "Seu login e senha foram salvos." });
   }
 
   function handleSubmit(event) {
@@ -321,9 +364,17 @@ export default function Dashboard({ user, onLogout }) {
                     variant="outline"
                     onClick={toggleColorMode}
                   />
-                  <Button colorScheme="rose" variant="outline" onClick={onLogout}>
-                    Sair
-                  </Button>
+                  <Menu>
+                    <MenuButton as={Button} colorScheme="brand" variant="outline">
+                      {user.email}
+                    </MenuButton>
+                    <MenuList>
+                      <MenuItem onClick={profileModal.onOpen}>Editar login e senha</MenuItem>
+                      <MenuItem color="rose.500" onClick={onLogout}>
+                        Sair
+                      </MenuItem>
+                    </MenuList>
+                  </Menu>
                 </HStack>
               </HStack>
 
@@ -598,6 +649,38 @@ export default function Dashboard({ user, onLogout }) {
             </Button>
             <Button type="submit" form="expense-form" leftIcon={<AddIcon />} colorScheme="mint">
               {editingId ? "Salvar edição" : "Adicionar"}
+            </Button>
+          </ModalFooter>
+        </ModalContent>
+      </Modal>
+
+      <Modal isOpen={profileModal.isOpen} onClose={profileModal.onClose} isCentered>
+        <ModalOverlay />
+        <ModalContent borderRadius="24px">
+          <ModalHeader>Editar usuário</ModalHeader>
+          <ModalCloseButton />
+          <ModalBody>
+            <Stack as="form" id="profile-form" spacing={4} onSubmit={handleProfileSubmit}>
+              <FormControl>
+                <FormLabel>Login</FormLabel>
+                <Input value={profileForm.email} onChange={(event) => setProfileForm({ ...profileForm, email: event.target.value })} />
+              </FormControl>
+              <FormControl>
+                <FormLabel>Senha</FormLabel>
+                <Input
+                  type="password"
+                  value={profileForm.password}
+                  onChange={(event) => setProfileForm({ ...profileForm, password: event.target.value })}
+                />
+              </FormControl>
+            </Stack>
+          </ModalBody>
+          <ModalFooter>
+            <Button variant="ghost" mr={3} onClick={profileModal.onClose}>
+              Cancelar
+            </Button>
+            <Button type="submit" form="profile-form" colorScheme="brand">
+              Salvar usuário
             </Button>
           </ModalFooter>
         </ModalContent>

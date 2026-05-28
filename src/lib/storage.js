@@ -64,6 +64,32 @@ export function saveExpenses(email, year, month, expenses) {
   writeJson(expensesKey(email, year, month), expenses);
 }
 
+export function migrateFinanceKeys(oldEmail, newEmail) {
+  if (oldEmail === newEmail) {
+    return;
+  }
+
+  const keysToMove = [];
+
+  for (let index = 0; index < localStorage.length; index += 1) {
+    const key = localStorage.key(index);
+    if (key?.startsWith(`salary_${oldEmail}_`) || key?.startsWith(`expenses_${oldEmail}_`)) {
+      keysToMove.push(key);
+    }
+  }
+
+  keysToMove.forEach((oldKey) => {
+    const newKey = oldKey.startsWith("salary_")
+      ? oldKey.replace(`salary_${oldEmail}_`, `salary_${newEmail}_`)
+      : oldKey.replace(`expenses_${oldEmail}_`, `expenses_${newEmail}_`);
+
+    if (!localStorage.getItem(newKey)) {
+      localStorage.setItem(newKey, localStorage.getItem(oldKey));
+    }
+    localStorage.removeItem(oldKey);
+  });
+}
+
 export function initializeUsers() {
   const users = getUsers();
   const normalizedUsers = users.filter((user) => user?.email && user?.password);

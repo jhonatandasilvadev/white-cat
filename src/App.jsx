@@ -22,5 +22,5 @@ export default function App() {
     setUser(null);
   }
 
-  return user ? <Dashboard user={user} onLogout={handleLogout} /> : <AuthScreen onLogin={handleLogin} />;
+  return user ? <Dashboard user={user} onUserUpdate={handleLogin} onLogout={handleLogout} /> : <AuthScreen onLogin={handleLogin} />;
 }
