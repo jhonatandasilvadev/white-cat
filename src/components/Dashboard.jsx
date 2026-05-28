@@ -81,6 +81,8 @@ export default function Dashboard({ user, onUserUpdate, onLogout }) {
   const mutedText = useColorModeValue("gray.600", "gray.300");
   const softText = useColorModeValue("gray.500", "gray.400");
   const subtleBg = useColorModeValue("whiteAlpha.700", "whiteAlpha.100");
+  const mobileItemBg = useColorModeValue("whiteAlpha.800", "whiteAlpha.100");
+  const mobileItemBorder = useColorModeValue("gray.100", "whiteAlpha.200");
   const brasiliaNow = getBrasiliaDate();
   const [selected, setSelected] = useState({ year: brasiliaNow.getFullYear(), month: brasiliaNow.getMonth() + 1 });
   const [timeLabel, setTimeLabel] = useState(getCurrentTimeLabel());
@@ -171,7 +173,7 @@ export default function Dashboard({ user, onUserUpdate, onLogout }) {
     const nextPassword = profileForm.password;
 
     if (!nextEmail || !nextPassword) {
-      notify({ status: "warning", title: "Preencha os dados", description: "Login e senha são obrigatórios." });
+      notify({ status: "warning", title: "Preencha os dados", description: "Usuário e senha são obrigatórios." });
       return;
     }
 
@@ -179,7 +181,7 @@ export default function Dashboard({ user, onUserUpdate, onLogout }) {
     const emailTaken = users.some((savedUser) => savedUser.email === nextEmail && savedUser.email !== user.email);
 
     if (emailTaken) {
-      notify({ status: "warning", title: "Login já existe", description: "Escolha outro login para continuar." });
+      notify({ status: "warning", title: "Usuário já existe", description: "Escolha outro usuário para continuar." });
       return;
     }
 
@@ -195,7 +197,7 @@ export default function Dashboard({ user, onUserUpdate, onLogout }) {
     setLoggedUser(nextUser);
     onUserUpdate(nextUser);
     profileModal.onClose();
-    notify({ status: "success", title: "Perfil atualizado", description: "Seu login e senha foram salvos." });
+    notify({ status: "success", title: "Perfil atualizado", description: "Seu usuário e senha foram salvos." });
   }
 
   function handleSubmit(event) {
@@ -369,7 +371,7 @@ export default function Dashboard({ user, onUserUpdate, onLogout }) {
                       {user.email}
                     </MenuButton>
                     <MenuList>
-                      <MenuItem onClick={profileModal.onOpen}>Editar login e senha</MenuItem>
+                      <MenuItem onClick={profileModal.onOpen}>Editar usuário e senha</MenuItem>
                       <MenuItem color="rose.500" onClick={onLogout}>
                         Sair
                       </MenuItem>
@@ -481,7 +483,40 @@ export default function Dashboard({ user, onUserUpdate, onLogout }) {
                     </Button>
                   </HStack>
                 </HStack>
-                <TableContainer>
+                <Stack display={{ base: "flex", md: "none" }} spacing={2}>
+                  {sortedExpenses.map((expense) => {
+                    const statusView = getExpenseStatusView(expense);
+
+                    return (
+                      <Box
+                        key={expense.id}
+                        bg={mobileItemBg}
+                        border="1px solid"
+                        borderColor={mobileItemBorder}
+                        borderRadius="16px"
+                        px={3}
+                        py={3}
+                        onClick={() => editExpense(expense)}
+                      >
+                        <HStack justify="space-between" align="center" gap={3}>
+                          <Box minW={0} flex="1">
+                            <Text fontWeight="800" noOfLines={1}>
+                              {expense.name}
+                            </Text>
+                            <Badge colorScheme={statusView.colorScheme} borderRadius="full" px={2} mt={1}>
+                              {statusView.label}
+                            </Badge>
+                          </Box>
+                          <Text fontWeight="900" color={statusView.color} whiteSpace="nowrap">
+                            {formatMoney(expense.value)}
+                          </Text>
+                        </HStack>
+                      </Box>
+                    );
+                  })}
+                </Stack>
+
+                <TableContainer display={{ base: "none", md: "block" }}>
                   <Table variant="simple" size="sm">
                     <Thead>
                       <Tr>
@@ -662,7 +697,7 @@ export default function Dashboard({ user, onUserUpdate, onLogout }) {
           <ModalBody>
             <Stack as="form" id="profile-form" spacing={4} onSubmit={handleProfileSubmit}>
               <FormControl>
-                <FormLabel>Login</FormLabel>
+                <FormLabel>Usuário</FormLabel>
                 <Input value={profileForm.email} onChange={(event) => setProfileForm({ ...profileForm, email: event.target.value })} />
               </FormControl>
               <FormControl>
