@@ -6,6 +6,7 @@ import {
   FormControl,
   FormLabel,
   Heading,
+  SimpleGrid,
   Input,
   List,
   ListIcon,
@@ -79,87 +80,88 @@ export default function AuthScreen({ onLogin }) {
   }
 
   return (
-    <Box minH="100vh" py={{ base: 8, md: 14 }}>
-      <Container maxW="1180px">
-        <Stack direction={{ base: "column", lg: "row" }} spacing={{ base: 8, lg: 12 }} align="center">
-          <Stack flex="1" spacing={7}>
+    <Box minH="100vh" py={{ base: 8, md: 12 }} display="flex" alignItems="center">
+      <Container maxW="1120px">
+        <Stack spacing={{ base: 7, md: 9 }} align="center">
+          <Stack spacing={4} align="center" w="100%" maxW="760px">
             <Badge alignSelf="flex-start" colorScheme="mint" borderRadius="full" px={4} py={2}>
               Planejamento financeiro
             </Badge>
-            <Stack spacing={4}>
-              <Heading size={{ base: "xl", md: "2xl" }} lineHeight="1.08" color={headingColor}>
-                O controle do seu mês, com a clareza de um produto premium.
-              </Heading>
-              <Text fontSize={{ base: "lg", md: "xl" }} color={bodyColor} maxW="680px">
-                Acompanhe saldo previsto, compromissos e vencimentos em um painel mensal desenhado para decisões rápidas.
-              </Text>
-            </Stack>
-            <HeroCard p={{ base: 5, md: 7 }}>
+            <Heading size={{ base: "xl", md: "2xl" }} lineHeight="1.08" color={headingColor} textAlign="left" w="100%">
+              O controle do seu mês, com a clareza de um produto premium.
+            </Heading>
+            <Text fontSize={{ base: "lg", md: "xl" }} color={bodyColor} textAlign="left" w="100%">
+              Acompanhe saldo previsto, compromissos e vencimentos em um painel mensal desenhado para decisões rápidas.
+            </Text>
+          </Stack>
+
+          <SimpleGrid columns={{ base: 1, lg: 2 }} spacing={{ base: 6, lg: 8 }} alignItems="stretch" w="100%" maxW="960px">
+            <HeroCard p={{ base: 5, md: 6 }} h="100%">
               <Heading size="md" mb={4}>
                 O que voce ganha
               </Heading>
               <List spacing={3}>
                 {benefits.map((benefit) => (
-                  <ListItem key={benefit} display="flex" color={listColor}>
+                  <ListItem key={benefit} display="flex" color={listColor} textAlign="left">
                     <ListIcon as={CheckCircleIcon} color="mint.500" mt={1} />
                     {benefit}
                   </ListItem>
                 ))}
               </List>
             </HeroCard>
-          </Stack>
 
-          <HeroCard w="100%" maxW="440px" p={{ base: 5, md: 7 }}>
-            <Tabs isFitted colorScheme="brand" variant="soft-rounded">
-              <TabList bg={tabsBg} p={1} borderRadius="full">
-                <Tab>Entrar</Tab>
-                <Tab>Criar conta</Tab>
-              </TabList>
-              <TabPanels>
-                <TabPanel px={0} pb={0}>
-                  <Stack as="form" spacing={4} onSubmit={submitLogin}>
-                    <FormControl>
-                      <FormLabel color={labelColor}>Usuário</FormLabel>
-                      <Input value={login.username} onChange={(event) => setLogin({ ...login, username: event.target.value })} />
-                    </FormControl>
-                    <FormControl>
-                      <FormLabel color={labelColor}>Senha</FormLabel>
-                      <Input
-                        type="password"
-                        value={login.password}
-                        onChange={(event) => setLogin({ ...login, password: event.target.value })}
-                      />
-                    </FormControl>
-                    <Button type="submit" colorScheme="brand" size="lg">
-                      Entrar
-                    </Button>
-                  </Stack>
-                </TabPanel>
-                <TabPanel px={0} pb={0}>
-                  <Stack as="form" spacing={4} onSubmit={submitRegister}>
-                    <FormControl>
-                      <FormLabel color={labelColor}>Usuário</FormLabel>
-                      <Input
-                        value={register.username}
-                        onChange={(event) => setRegister({ ...register, username: event.target.value })}
-                      />
-                    </FormControl>
-                    <FormControl>
-                      <FormLabel color={labelColor}>Senha</FormLabel>
-                      <Input
-                        type="password"
-                        value={register.password}
-                        onChange={(event) => setRegister({ ...register, password: event.target.value })}
-                      />
-                    </FormControl>
-                    <Button type="submit" colorScheme="lavender" size="lg">
-                      Criar conta
-                    </Button>
-                  </Stack>
-                </TabPanel>
-              </TabPanels>
-            </Tabs>
-          </HeroCard>
+            <HeroCard w="100%" p={{ base: 5, md: 6 }} h="100%">
+              <Tabs isFitted colorScheme="brand" variant="soft-rounded">
+                <TabList bg={tabsBg} p={1} borderRadius="full">
+                  <Tab>Entrar</Tab>
+                  <Tab>Criar conta</Tab>
+                </TabList>
+                <TabPanels>
+                  <TabPanel px={0} pb={0}>
+                    <Stack as="form" spacing={4} onSubmit={submitLogin}>
+                      <FormControl>
+                        <FormLabel color={labelColor}>Usuário</FormLabel>
+                        <Input value={login.username} onChange={(event) => setLogin({ ...login, username: event.target.value })} />
+                      </FormControl>
+                      <FormControl>
+                        <FormLabel color={labelColor}>Senha</FormLabel>
+                        <Input
+                          type="password"
+                          value={login.password}
+                          onChange={(event) => setLogin({ ...login, password: event.target.value })}
+                        />
+                      </FormControl>
+                      <Button type="submit" colorScheme="brand" size="lg">
+                        Entrar
+                      </Button>
+                    </Stack>
+                  </TabPanel>
+                  <TabPanel px={0} pb={0}>
+                    <Stack as="form" spacing={4} onSubmit={submitRegister}>
+                      <FormControl>
+                        <FormLabel color={labelColor}>Usuário</FormLabel>
+                        <Input
+                          value={register.username}
+                          onChange={(event) => setRegister({ ...register, username: event.target.value })}
+                        />
+                      </FormControl>
+                      <FormControl>
+                        <FormLabel color={labelColor}>Senha</FormLabel>
+                        <Input
+                          type="password"
+                          value={register.password}
+                          onChange={(event) => setRegister({ ...register, password: event.target.value })}
+                        />
+                      </FormControl>
+                      <Button type="submit" colorScheme="lavender" size="lg">
+                        Criar conta
+                      </Button>
+                    </Stack>
+                  </TabPanel>
+                </TabPanels>
+              </Tabs>
+            </HeroCard>
+          </SimpleGrid>
         </Stack>
       </Container>
     </Box>
