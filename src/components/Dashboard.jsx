@@ -2,6 +2,7 @@ import {
   Badge,
   Box,
   Button,
+  Checkbox,
   Container,
   FormControl,
   FormLabel,
@@ -30,8 +31,13 @@ import {
   StatHelpText,
   StatLabel,
   StatNumber,
+  Tab,
+  TabList,
+  TabPanel,
+  TabPanels,
   Table,
   TableContainer,
+  Tabs,
   Tbody,
   Td,
   Text,
@@ -63,6 +69,18 @@ import {
 } from "../lib/finance.js";
 import { getExpenses, getSalary, getUsers, migrateFinanceKeys, saveExpenses, saveSalary, saveUsers, setLoggedUser } from "../lib/storage.js";
 import { seedAprilIfNeeded } from "../lib/migrateLegacy.js";
+import {
+  FIXED_RECURRENCE_MONTHS,
+  generateInstallmentDrafts,
+  generateRecurringDrafts,
+  groupDraftsByMonth,
+  makeExpense,
+  normalizeExpenseDraft,
+  normalizeImportedDraft,
+  parseCsvExpenses,
+  parseTextExpenses,
+  validateExpenseDraft,
+} from "../lib/expenseTools.js";
 
 const emptyForm = {
   name: "",
@@ -72,6 +90,15 @@ const emptyForm = {
   installment: "",
   status: "aguardando",
   debtBalance: "",
+  note: "",
+};
+
+const emptyBulkRow = {
+  name: "",
+  category: "Outros",
+  value: "",
+  dueDate: "",
+  status: "aguardando",
   note: "",
 };
 
@@ -102,6 +129,15 @@ export default function Dashboard({ user, onUserUpdate, onLogout }) {
   const [form, setForm] = useState(emptyForm);
   const [editingId, setEditingId] = useState(null);
   const [sortMode, setSortMode] = useState("dueDate");
+  const [expenseTab, setExpenseTab] = useState(0);
+  const [repeatMonthly, setRepeatMonthly] = useState(false);
+  const [repeatFixed, setRepeatFixed] = useState(false);
+  const [repeatMonths, setRepeatMonths] = useState(3);
+  const [bulkRows, setBulkRows] = useState([{ ...emptyBulkRow }, { ...emptyBulkRow }, { ...emptyBulkRow }]);
+  const [textImport, setTextImport] = useState("");
+  const [csvImport, setCsvImport] = useState("");
+  const [importPreview, setImportPreview] = useState([]);
+  const [previewTitle, setPreviewTitle] = useState("");
   const [visibleExpenseColumns, setVisibleExpenseColumns] = useState(() => {
     try {
       const savedColumns = JSON.parse(localStorage.getItem(EXPENSE_COLUMNS_KEY));
@@ -208,6 +244,61 @@ export default function Dashboard({ user, onUserUpdate, onLogout }) {
     saveVisibleExpenseColumns(nextColumns.length > 0 ? nextColumns : ["value"]);
   }
 
+  function clearImportPreview() {
+    setImportPreview([]);
+    setPreviewTitle("");
+  }
+
+  function saveDraftsAcrossMonths(drafts) {
+    const groups = groupDraftsByMonth(drafts);
+    let createdCount = 0;
+
+    Object.values(groups).forEach((group) => {
+      const currentGroup = group.year === selected.year && group.month === selected.month;
+      const existingExpenses = currentGroup ? expenses : getExpenses(user.email, group.year, group.month);
+      const createdExpenses = group.drafts.map((draft, index) => makeExpense(draft, Date.now() + createdCount + index));
+      createdCount += createdExpenses.length;
+
+      if (currentGroup) {
+        persistExpenses([...existingExpenses, ...createdExpenses]);
+      } else {
+        saveExpenses(user.email, group.year, group.month, [...existingExpenses, ...createdExpenses]);
+      }
+    });
+
+    return createdCount;
+  }
+
+  function validateDraftsForSave(drafts) {
+    return drafts.flatMap((draft, index) => validateExpenseDraft(draft).map((error) => `Linha ${index + 1}: ${error}`));
+  }
+
+  function showPreview(title, drafts) {
+    const errors = validateDraftsForSave(drafts);
+    setPreviewTitle(title);
+    setImportPreview(drafts.map((draft, index) => ({ ...draft, errors: draft.errors?.length ? draft.errors : validateExpenseDraft(draft), previewId: index })));
+
+    if (errors.length > 0) {
+      notify({ status: "warning", title: "Revise a prévia", description: errors[0] });
+    }
+  }
+
+  function confirmPreview() {
+    const errors = validateDraftsForSave(importPreview);
+    if (errors.length > 0) {
+      notify({ status: "warning", title: "Corrija antes de salvar", description: errors[0] });
+      return;
+    }
+
+    const count = saveDraftsAcrossMonths(importPreview);
+    clearImportPreview();
+    setTextImport("");
+    setCsvImport("");
+    setBulkRows([{ ...emptyBulkRow }, { ...emptyBulkRow }, { ...emptyBulkRow }]);
+    expenseModal.onClose();
+    notify({ status: "success", title: "Despesas adicionadas", description: `${count} despesa(s) salvas.` });
+  }
+
   function handleProfileSubmit(event) {
     event.preventDefault();
     const nextEmail = profileForm.email.trim();
@@ -244,30 +335,39 @@ export default function Dashboard({ user, onUserUpdate, onLogout }) {
   function handleSubmit(event) {
     event.preventDefault();
 
-    if (!form.name || form.value === "") {
-      notify({ status: "warning", title: "Revise a despesa", description: "Descrição e valor são obrigatórios." });
+    const normalized = normalizeExpenseDraft(form, selected);
+    const validationErrors = validateExpenseDraft(normalized);
+    if (validationErrors.length > 0) {
+      notify({ status: "warning", title: "Revise a despesa", description: validationErrors[0] });
       return;
     }
 
-    const payload = {
-      ...form,
-      value: Number(form.value),
-      dueDate: form.dueDate === "" ? "" : Number(form.dueDate),
-      status: form.status || "aguardando",
-      debtBalance: form.debtBalance === "" ? "" : Number(form.debtBalance),
-      note: form.note || "",
-    };
-
     if (editingId) {
-      persistExpenses(expenses.map((expense) => (expense.id === editingId ? { ...payload, id: editingId } : expense)));
+      persistExpenses(expenses.map((expense) => (expense.id === editingId ? makeExpense(normalized, editingId) : expense)));
       notify({ status: "success", title: "Despesa atualizada" });
     } else {
-      persistExpenses([...expenses, { ...payload, id: Date.now() }]);
-      notify({ status: "success", title: "Despesa adicionada" });
+      const generatedDrafts =
+        normalized.debtBalance && form.installment
+          ? generateInstallmentDrafts(form, selected)
+          : repeatMonthly
+            ? generateRecurringDrafts(form, selected, { fixed: repeatFixed, months: repeatMonths })
+            : [normalized];
+      const generatedErrors = validateDraftsForSave(generatedDrafts);
+
+      if (generatedErrors.length > 0) {
+        notify({ status: "warning", title: "Revise a despesa", description: generatedErrors[0] });
+        return;
+      }
+
+      const count = saveDraftsAcrossMonths(generatedDrafts);
+      notify({ status: "success", title: "Despesa adicionada", description: `${count} lançamento(s) salvos.` });
     }
 
     setForm(emptyForm);
     setEditingId(null);
+    setRepeatMonthly(false);
+    setRepeatFixed(false);
+    setRepeatMonths(3);
     expenseModal.onClose();
   }
 
@@ -289,6 +389,11 @@ export default function Dashboard({ user, onUserUpdate, onLogout }) {
   function openNewExpense() {
     setEditingId(null);
     setForm(emptyForm);
+    setExpenseTab(0);
+    setRepeatMonthly(false);
+    setRepeatFixed(false);
+    setRepeatMonths(3);
+    clearImportPreview();
     expenseModal.onOpen();
   }
 
@@ -354,6 +459,65 @@ export default function Dashboard({ user, onUserUpdate, onLogout }) {
       status: "success",
       title: "Copiado para o próximo mês",
       description: `${copied.length} despesa(s) de ${monthLabel} foram enviadas para ${nextMonthLabel}.`,
+    });
+  }
+
+  function updateBulkRow(index, patch) {
+    setBulkRows(bulkRows.map((row, rowIndex) => (rowIndex === index ? { ...row, ...patch } : row)));
+    clearImportPreview();
+  }
+
+  function addBulkRow() {
+    setBulkRows([...bulkRows, { ...emptyBulkRow }]);
+  }
+
+  function removeBulkRow(index) {
+    setBulkRows(bulkRows.filter((_, rowIndex) => rowIndex !== index));
+    clearImportPreview();
+  }
+
+  function previewBulkRows() {
+    const drafts = bulkRows
+      .filter((row) => Object.values(row).some((value) => String(value || "").trim()))
+      .map((row) => normalizeImportedDraft(row, selected));
+
+    if (drafts.length === 0) {
+      notify({ status: "warning", title: "Nada para importar", description: "Preencha ao menos uma linha." });
+      return;
+    }
+
+    showPreview("Prévia das despesas em massa", drafts);
+  }
+
+  function previewTextImport() {
+    const drafts = parseTextExpenses(textImport, selected);
+    if (drafts.length === 0) {
+      notify({ status: "warning", title: "Nada para interpretar", description: "Cole uma despesa por linha." });
+      return;
+    }
+
+    showPreview("Prévia do texto importado", drafts);
+  }
+
+  function previewCsvImport() {
+    const drafts = parseCsvExpenses(csvImport, selected);
+    if (drafts.length === 0) {
+      notify({ status: "warning", title: "CSV vazio", description: "Use o cabeçalho descricao,categoria,valor,vencimento,status,observacao." });
+      return;
+    }
+
+    showPreview("Prévia do CSV importado", drafts);
+  }
+
+  function handleCsvFile(event) {
+    const file = event.target.files?.[0];
+    if (!file) {
+      return;
+    }
+
+    file.text().then((content) => {
+      setCsvImport(content);
+      clearImportPreview();
     });
   }
 
@@ -719,82 +883,179 @@ export default function Dashboard({ user, onUserUpdate, onLogout }) {
         </Grid>
       </Container>
 
-      <Modal isOpen={expenseModal.isOpen} onClose={expenseModal.onClose} isCentered size="xl">
+      <Modal isOpen={expenseModal.isOpen} onClose={expenseModal.onClose} isCentered size="6xl">
         <ModalOverlay />
         <ModalContent borderRadius="24px">
           <ModalHeader>{editingId ? "Editar despesa" : "Adicionar despesa"}</ModalHeader>
           <ModalCloseButton />
           <ModalBody>
-            <Stack as="form" id="expense-form" spacing={4} onSubmit={handleSubmit}>
-              <FormControl>
-                <FormLabel>Descricao</FormLabel>
-                <Input value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} />
-              </FormControl>
-              <FormControl>
-                <FormLabel>Categoria</FormLabel>
-                <Select value={form.category} onChange={(event) => setForm({ ...form, category: event.target.value })}>
-                  {CATEGORIES.map((category) => (
-                    <option key={category} value={category}>
-                      {category}
-                    </option>
-                  ))}
-                  {form.category && !CATEGORIES.includes(form.category) ? <option value={form.category}>{form.category}</option> : null}
-                </Select>
-              </FormControl>
-              <SimpleGrid columns={{ base: 1, md: 3 }} spacing={3}>
-                <FormControl>
-                  <FormLabel>Valor</FormLabel>
-                  <Input type="number" step="0.01" value={form.value} onChange={(event) => setForm({ ...form, value: event.target.value })} />
-                </FormControl>
-                <FormControl>
-                  <FormLabel>Divida total</FormLabel>
-                  <Input
-                    type="number"
-                    step="0.01"
-                    value={form.debtBalance}
-                    onChange={(event) => setForm({ ...form, debtBalance: event.target.value })}
-                  />
-                </FormControl>
-                <FormControl>
-                  <FormLabel>Vencimento</FormLabel>
-                  <Input
-                    type="number"
-                    min={1}
-                    max={31}
-                    value={form.dueDate}
-                    onChange={(event) => setForm({ ...form, dueDate: event.target.value })}
-                  />
-                </FormControl>
-              </SimpleGrid>
-              <SimpleGrid columns={{ base: 1, md: 2 }} spacing={3}>
-                <FormControl>
-                  <FormLabel>Parcela</FormLabel>
-                  <Input value={form.installment} onChange={(event) => setForm({ ...form, installment: event.target.value })} />
-                </FormControl>
-                <FormControl>
-                  <FormLabel>Status</FormLabel>
-                  <Select value={form.status} onChange={(event) => setForm({ ...form, status: event.target.value })}>
-                    {STATUSES.map((status) => (
-                      <option key={status} value={status}>
-                        {STATUS_LABELS[status]}
-                      </option>
-                    ))}
-                  </Select>
-                </FormControl>
-              </SimpleGrid>
-              <FormControl>
-                <FormLabel>Observação</FormLabel>
-                <Textarea value={form.note} onChange={(event) => setForm({ ...form, note: event.target.value })} />
-              </FormControl>
-            </Stack>
+            <Tabs colorScheme="brand" index={expenseTab} onChange={(index) => { setExpenseTab(index); clearImportPreview(); }}>
+              <TabList flexWrap="wrap">
+                <Tab>Individual</Tab>
+                <Tab>Várias despesas</Tab>
+                <Tab>Importar texto</Tab>
+                <Tab>CSV</Tab>
+              </TabList>
+              <TabPanels>
+                <TabPanel px={0}>
+                  <Stack as="form" id="expense-form" spacing={4} onSubmit={handleSubmit}>
+                    <FormControl>
+                      <FormLabel>Descrição</FormLabel>
+                      <Input value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} />
+                    </FormControl>
+                    <FormControl>
+                      <FormLabel>Categoria</FormLabel>
+                      <Select value={form.category} onChange={(event) => setForm({ ...form, category: event.target.value })}>
+                        {CATEGORIES.map((category) => (
+                          <option key={category} value={category}>
+                            {category}
+                          </option>
+                        ))}
+                        {form.category && !CATEGORIES.includes(form.category) ? <option value={form.category}>{form.category}</option> : null}
+                      </Select>
+                    </FormControl>
+                    <SimpleGrid columns={{ base: 1, md: 3 }} spacing={3}>
+                      <FormControl>
+                        <FormLabel>Valor</FormLabel>
+                        <Input value={form.value} placeholder="160,50" onChange={(event) => setForm({ ...form, value: event.target.value })} />
+                      </FormControl>
+                      <FormControl>
+                        <FormLabel>Dívida total</FormLabel>
+                        <Input
+                          value={form.debtBalance}
+                          placeholder="1200"
+                          onChange={(event) => setForm({ ...form, debtBalance: event.target.value })}
+                        />
+                      </FormControl>
+                      <FormControl>
+                        <FormLabel>Vencimento</FormLabel>
+                        <Input value={form.dueDate} placeholder="Dia 10 ou 10/07/2026" onChange={(event) => setForm({ ...form, dueDate: event.target.value })} />
+                      </FormControl>
+                    </SimpleGrid>
+                    <SimpleGrid columns={{ base: 1, md: 2 }} spacing={3}>
+                      <FormControl>
+                        <FormLabel>Parcela</FormLabel>
+                        <Input placeholder="12 ou 1/12" value={form.installment} onChange={(event) => setForm({ ...form, installment: event.target.value })} />
+                      </FormControl>
+                      <FormControl>
+                        <FormLabel>Status</FormLabel>
+                        <Select value={form.status} onChange={(event) => setForm({ ...form, status: event.target.value })}>
+                          {STATUSES.map((status) => (
+                            <option key={status} value={status}>
+                              {STATUS_LABELS[status]}
+                            </option>
+                          ))}
+                        </Select>
+                      </FormControl>
+                    </SimpleGrid>
+                    <Stack spacing={3} bg={subtleBg} borderRadius="18px" p={4}>
+                      <Checkbox isChecked={repeatMonthly} onChange={(event) => setRepeatMonthly(event.target.checked)} isDisabled={editingId}>
+                        Repetir todo mês
+                      </Checkbox>
+                      {repeatMonthly ? (
+                        <SimpleGrid columns={{ base: 1, md: 2 }} spacing={3}>
+                          <FormControl>
+                            <FormLabel>Quantidade de meses</FormLabel>
+                            <NumberInput value={repeatMonths} min={1} max={60} isDisabled={repeatFixed} onChange={(_, value) => setRepeatMonths(Number.isNaN(value) ? 1 : value)}>
+                              <NumberInputField />
+                            </NumberInput>
+                          </FormControl>
+                          <FormControl display="flex" alignItems="end">
+                            <Checkbox isChecked={repeatFixed} onChange={(event) => setRepeatFixed(event.target.checked)}>
+                              Recorrente fixa ({FIXED_RECURRENCE_MONTHS} meses)
+                            </Checkbox>
+                          </FormControl>
+                        </SimpleGrid>
+                      ) : null}
+                    </Stack>
+                    <FormControl>
+                      <FormLabel>Observação</FormLabel>
+                      <Textarea value={form.note} onChange={(event) => setForm({ ...form, note: event.target.value })} />
+                    </FormControl>
+                  </Stack>
+                </TabPanel>
+                <TabPanel px={0}>
+                  <Stack spacing={4}>
+                    <TableContainer>
+                      <Table size="sm">
+                        <Thead>
+                          <Tr>
+                            <Th>Descrição</Th>
+                            <Th>Categoria</Th>
+                            <Th>Valor</Th>
+                            <Th>Vencimento</Th>
+                            <Th>Status</Th>
+                            <Th>Observação</Th>
+                            <Th />
+                          </Tr>
+                        </Thead>
+                        <Tbody>
+                          {bulkRows.map((row, index) => (
+                            <Tr key={index}>
+                              <Td><Input size="sm" value={row.name} onChange={(event) => updateBulkRow(index, { name: event.target.value })} /></Td>
+                              <Td>
+                                <Select size="sm" value={row.category} onChange={(event) => updateBulkRow(index, { category: event.target.value })}>
+                                  {CATEGORIES.map((category) => <option key={category} value={category}>{category}</option>)}
+                                </Select>
+                              </Td>
+                              <Td><Input size="sm" value={row.value} onChange={(event) => updateBulkRow(index, { value: event.target.value })} /></Td>
+                              <Td><Input size="sm" value={row.dueDate} onChange={(event) => updateBulkRow(index, { dueDate: event.target.value })} /></Td>
+                              <Td>
+                                <Select size="sm" value={row.status} onChange={(event) => updateBulkRow(index, { status: event.target.value })}>
+                                  {STATUSES.map((status) => <option key={status} value={status}>{STATUS_LABELS[status]}</option>)}
+                                </Select>
+                              </Td>
+                              <Td><Input size="sm" value={row.note} onChange={(event) => updateBulkRow(index, { note: event.target.value })} /></Td>
+                              <Td><IconButton aria-label="Remover linha" icon={<DeleteIcon />} size="sm" variant="ghost" onClick={() => removeBulkRow(index)} /></Td>
+                            </Tr>
+                          ))}
+                        </Tbody>
+                      </Table>
+                    </TableContainer>
+                    <HStack>
+                      <Button size="sm" variant="outline" onClick={addBulkRow}>Adicionar linha</Button>
+                      <Button size="sm" colorScheme="brand" onClick={previewBulkRows}>Gerar prévia</Button>
+                    </HStack>
+                    <ImportPreview title={previewTitle} drafts={importPreview} />
+                  </Stack>
+                </TabPanel>
+                <TabPanel px={0}>
+                  <Stack spacing={4}>
+                    <Textarea minH="180px" value={textImport} onChange={(event) => { setTextImport(event.target.value); clearImportPreview(); }} placeholder={"Internet Vivo 160 vence dia 10\nAluguel 1000 vence dia 5"} />
+                    <Button alignSelf="flex-start" colorScheme="brand" onClick={previewTextImport}>Interpretar texto</Button>
+                    <ImportPreview title={previewTitle} drafts={importPreview} />
+                  </Stack>
+                </TabPanel>
+                <TabPanel px={0}>
+                  <Stack spacing={4}>
+                    <HStack flexWrap="wrap">
+                      <Button as="label" size="sm" variant="outline" colorScheme="brand" cursor="pointer">
+                        Importar CSV
+                        <Input type="file" accept=".csv,text/csv" display="none" onChange={handleCsvFile} />
+                      </Button>
+                      <Text color={softText} fontSize="sm">Cabeçalho: descricao,categoria,valor,vencimento,status,observacao</Text>
+                    </HStack>
+                    <Textarea minH="180px" value={csvImport} onChange={(event) => { setCsvImport(event.target.value); clearImportPreview(); }} placeholder={"descricao,categoria,valor,vencimento,status,observacao\nInternet,Internet,\"160,50\",10,aguardando,"} />
+                    <Button alignSelf="flex-start" colorScheme="brand" onClick={previewCsvImport}>Validar CSV</Button>
+                    <ImportPreview title={previewTitle} drafts={importPreview} />
+                  </Stack>
+                </TabPanel>
+              </TabPanels>
+            </Tabs>
           </ModalBody>
           <ModalFooter>
             <Button variant="ghost" mr={3} onClick={expenseModal.onClose}>
               Cancelar
             </Button>
-            <Button type="submit" form="expense-form" leftIcon={<AddIcon />} colorScheme="mint">
-              {editingId ? "Salvar edição" : "Adicionar"}
-            </Button>
+            {expenseTab === 0 ? (
+              <Button type="submit" form="expense-form" leftIcon={<AddIcon />} colorScheme="mint">
+                {editingId ? "Salvar edição" : "Adicionar"}
+              </Button>
+            ) : (
+              <Button colorScheme="mint" isDisabled={importPreview.length === 0} onClick={confirmPreview}>
+                Confirmar prévia
+              </Button>
+            )}
           </ModalFooter>
         </ModalContent>
       </Modal>
@@ -862,5 +1123,48 @@ function SummaryCard({ label, value, help, colorScheme = "brand" }) {
         </StatHelpText>
       </Stat>
     </Box>
+  );
+}
+
+function ImportPreview({ drafts, title }) {
+  if (!drafts.length) {
+    return null;
+  }
+
+  return (
+    <Stack spacing={3}>
+      <Box>
+        <Text fontWeight="800">{title}</Text>
+        <Text color="gray.500" fontSize="sm">
+          {drafts.length} lançamento(s) aguardando confirmação.
+        </Text>
+      </Box>
+      <TableContainer maxH="280px" overflowY="auto">
+        <Table size="sm">
+          <Thead>
+            <Tr>
+              <Th>Descrição</Th>
+              <Th isNumeric>Valor</Th>
+              <Th>Vencimento</Th>
+              <Th>Status</Th>
+              <Th>Erros</Th>
+            </Tr>
+          </Thead>
+          <Tbody>
+            {drafts.map((draft) => (
+              <Tr key={draft.previewId ?? `${draft.name}-${draft.dueYear}-${draft.dueMonth}-${draft.dueDate}`}>
+                <Td fontWeight="700">{draft.name || "—"}</Td>
+                <Td isNumeric>{formatMoney(draft.value)}</Td>
+                <Td>
+                  {draft.dueDate ? `${String(draft.dueDate).padStart(2, "0")}/${String(draft.dueMonth).padStart(2, "0")}/${draft.dueYear}` : "—"}
+                </Td>
+                <Td>{STATUS_LABELS[draft.status] || draft.status}</Td>
+                <Td color={draft.errors?.length ? "rose.300" : "mint.300"}>{draft.errors?.length ? draft.errors.join(", ") : "Ok"}</Td>
+              </Tr>
+            ))}
+          </Tbody>
+        </Table>
+      </TableContainer>
+    </Stack>
   );
 }
