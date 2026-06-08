@@ -12,12 +12,12 @@ body,
 
 body {
   margin: 0;
-  font-family: Manrope, system-ui, sans-serif;
+  font-family: "Segoe UI", Inter, system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
   color: #1f2933;
   background:
-    radial-gradient(circle at top left, rgba(193, 244, 219, 0.7), transparent 32rem),
-    radial-gradient(circle at top right, rgba(218, 210, 255, 0.72), transparent 34rem),
-    linear-gradient(135deg, #fff7f0 0%, #f5fbff 42%, #fff3f7 100%);
+    radial-gradient(circle at top left, rgba(142, 213, 180, 0.56), transparent 32rem),
+    radial-gradient(circle at top right, rgba(176, 163, 235, 0.58), transparent 34rem),
+    linear-gradient(135deg, #e7ecf2 0%, #dfeaf0 42%, #eadfe8 100%);
 }
 
 button,

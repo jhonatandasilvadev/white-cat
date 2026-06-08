@@ -2,7 +2,6 @@ import {
   Badge,
   Box,
   Button,
-  ButtonGroup,
   Container,
   FormControl,
   FormLabel,
@@ -44,9 +43,9 @@ import {
   useColorModeValue,
   useDisclosure,
 } from "@chakra-ui/react";
-import { AddIcon, DeleteIcon, EditIcon, MoonIcon, SunIcon } from "@chakra-ui/icons";
+import { AddIcon, CheckIcon, DeleteIcon, EditIcon, MoonIcon, SettingsIcon, SunIcon } from "@chakra-ui/icons";
 import { ChevronDownIcon, ChevronUpIcon } from "@chakra-ui/icons";
-import { useEffect, useMemo, useState } from "react";
+import { Fragment, useEffect, useMemo, useState } from "react";
 import HeroCard from "./HeroCard.jsx";
 import { notify } from "../toast.js";
 import {
@@ -76,6 +75,18 @@ const emptyForm = {
   note: "",
 };
 
+const EXPENSE_COLUMNS_KEY = "finance_expense_columns";
+const expenseColumns = [
+  { key: "category", label: "Categoria" },
+  { key: "value", label: "Valor", numeric: true },
+  { key: "debtBalance", label: "Dívida total", numeric: true },
+  { key: "dueDate", label: "Vencimento" },
+  { key: "installment", label: "Parcela" },
+  { key: "status", label: "Status" },
+  { key: "note", label: "Observação" },
+];
+const defaultExpenseColumns = ["category", "value", "dueDate", "installment", "status", "note"];
+
 export default function Dashboard({ user, onUserUpdate, onLogout }) {
   const { colorMode, toggleColorMode } = useColorMode();
   const mutedText = useColorModeValue("gray.600", "gray.300");
@@ -91,6 +102,18 @@ export default function Dashboard({ user, onUserUpdate, onLogout }) {
   const [form, setForm] = useState(emptyForm);
   const [editingId, setEditingId] = useState(null);
   const [sortMode, setSortMode] = useState("dueDate");
+  const [visibleExpenseColumns, setVisibleExpenseColumns] = useState(() => {
+    try {
+      const savedColumns = JSON.parse(localStorage.getItem(EXPENSE_COLUMNS_KEY));
+      const validColumns = Array.isArray(savedColumns)
+        ? savedColumns.filter((columnKey) => expenseColumns.some((column) => column.key === columnKey))
+        : [];
+
+      return validColumns.length > 0 ? validColumns : defaultExpenseColumns;
+    } catch {
+      return defaultExpenseColumns;
+    }
+  });
   const [profileForm, setProfileForm] = useState({ email: user.email, password: user.password || "" });
   const expenseModal = useDisclosure();
   const profileModal = useDisclosure();
@@ -165,6 +188,24 @@ export default function Dashboard({ user, onUserUpdate, onLogout }) {
   function persistSalary(value) {
     setSalary(Number(value || 0));
     saveSalary(user.email, selected.year, selected.month, Number(value || 0));
+  }
+
+  function saveVisibleExpenseColumns(nextColumns) {
+    setVisibleExpenseColumns(nextColumns);
+    try {
+      localStorage.setItem(EXPENSE_COLUMNS_KEY, JSON.stringify(nextColumns));
+    } catch {
+      // The current column layout still works for the session when storage is unavailable.
+    }
+  }
+
+  function toggleExpenseColumn(columnKey) {
+    const isVisible = visibleExpenseColumns.includes(columnKey);
+    const nextColumns = isVisible
+      ? visibleExpenseColumns.filter((item) => item !== columnKey)
+      : expenseColumns.filter((column) => [...visibleExpenseColumns, columnKey].includes(column.key)).map((column) => column.key);
+
+    saveVisibleExpenseColumns(nextColumns.length > 0 ? nextColumns : ["value"]);
   }
 
   function handleProfileSubmit(event) {
@@ -338,111 +379,184 @@ export default function Dashboard({ user, onUserUpdate, onLogout }) {
     return { label: "Não pago", colorScheme: "peach", bg: "peach.100", color: "peach.900" };
   }
 
+  function renderExpenseCell(expense, columnKey, statusView) {
+    if (columnKey === "category") {
+      return <Td>{expense.category || "—"}</Td>;
+    }
+
+    if (columnKey === "value") {
+      return <Td isNumeric>{formatMoney(expense.value)}</Td>;
+    }
+
+    if (columnKey === "debtBalance") {
+      return <Td isNumeric>{expense.debtBalance ? formatMoney(expense.debtBalance) : "—"}</Td>;
+    }
+
+    if (columnKey === "dueDate") {
+      return <Td>{expense.dueDate ? `Dia ${expense.dueDate}` : "—"}</Td>;
+    }
+
+    if (columnKey === "installment") {
+      return <Td textAlign="center">{expense.installment || "—"}</Td>;
+    }
+
+    if (columnKey === "note") {
+      return (
+        <Td maxW="240px" whiteSpace="normal">
+          {expense.note || "—"}
+        </Td>
+      );
+    }
+
+    if (columnKey === "status") {
+      return (
+        <Td minW="150px">
+          <Stack spacing={1} align="stretch">
+            <Badge alignSelf="flex-start" colorScheme={statusView.colorScheme} borderRadius="full" px={2}>
+              {statusView.label}
+            </Badge>
+            <Select
+              size="sm"
+              value={expense.status || "aguardando"}
+              bg={statusView.bg}
+              color={statusView.color}
+              fontWeight="800"
+              onChange={(event) => updateStatus(expense.id, event.target.value)}
+            >
+              {STATUSES.map((status) => (
+                <option key={status} value={status}>
+                  {STATUS_LABELS[status]}
+                </option>
+              ))}
+            </Select>
+          </Stack>
+        </Td>
+      );
+    }
+
+    return null;
+  }
+
+  const welcomePanel = (
+    <HeroCard h="100%" p={{ base: 4, md: 5 }}>
+      <Stack spacing={4}>
+        <HStack justify="space-between" align="flex-start" flexWrap="wrap" gap={3}>
+          <Stack spacing={1}>
+            <HStack flexWrap="wrap">
+              <Badge colorScheme="brand" borderRadius="full" px={3} py={1}>
+                Dashboard financeiro
+              </Badge>
+              <Badge colorScheme={urgency.colorScheme} borderRadius="full" px={3} py={1}>
+                {urgency.label}
+              </Badge>
+            </HStack>
+            <Heading size={{ base: "md", md: "lg" }}>Bem-vindo, {user.email}</Heading>
+            <Text color={mutedText} fontSize="sm">
+              {timeLabel}
+            </Text>
+          </Stack>
+          <HStack flexWrap="wrap" justify="flex-end">
+            <IconButton
+              aria-label="Alternar tema"
+              icon={colorMode === "light" ? <MoonIcon /> : <SunIcon />}
+              variant="outline"
+              onClick={toggleColorMode}
+            />
+            <Menu>
+              <MenuButton as={Button} colorScheme="brand" variant="outline">
+                {user.email}
+              </MenuButton>
+              <MenuList>
+                <MenuItem onClick={profileModal.onOpen}>Editar usuário e senha</MenuItem>
+                <MenuItem color="rose.500" onClick={onLogout}>
+                  Sair
+                </MenuItem>
+              </MenuList>
+            </Menu>
+          </HStack>
+        </HStack>
+
+        <SimpleGrid columns={{ base: 2, xl: 1 }} spacing={2}>
+          <SummaryCard label="Salario" value={formatMoney(salary)} help={monthLabel} colorScheme="mint" />
+          <SummaryCard label="Gastos" value={formatMoney(summary.total)} help={`${expenses.length} despesa(s)`} colorScheme="peach" />
+          <SummaryCard
+            label="Saldo previsto"
+            value={formatMoney(summary.balance)}
+            help={`Dia ${formatMoney(summary.dailyBalance)}`}
+            colorScheme={summary.balance >= 0 ? "sky" : "rose"}
+          />
+          <SummaryCard label="Dividas totais" value={formatMoney(totalDebtBalance)} help="Renegociar" colorScheme="lavender" />
+        </SimpleGrid>
+      </Stack>
+    </HeroCard>
+  );
+
+  const monthPanel = (
+    <HeroCard h="100%" p={{ base: 4, md: 5 }}>
+      <Stack spacing={5} align="stretch">
+        <Stack spacing={1}>
+          <Text fontWeight="800">Pasta do mês</Text>
+          <Text color={softText}>{monthLabel}</Text>
+        </Stack>
+
+        <HStack justify="space-between" align="center" spacing={3}>
+          <Button size="sm" variant="outline" colorScheme="brand" onClick={copyToNextMonth} flex="1" minW={0}>
+            Copiar para próximo mês
+          </Button>
+          <Box fontSize="2xl" lineHeight="1" flexShrink={0}>
+            📁
+          </Box>
+        </HStack>
+
+        <Stack spacing={4}>
+          <FormControl>
+            <FormLabel fontSize="sm">Ano</FormLabel>
+            <Select value={selected.year} onChange={(event) => setSelected({ ...selected, year: Number(event.target.value) })}>
+              {yearOptions.map((year) => (
+                <option key={year} value={year}>
+                  {year}
+                </option>
+              ))}
+            </Select>
+          </FormControl>
+          <FormControl>
+            <FormLabel fontSize="sm">Salário mensal</FormLabel>
+            <NumberInput value={salary} min={0} onChange={(_, value) => persistSalary(Number.isNaN(value) ? 0 : value)}>
+              <NumberInputField placeholder="3000" />
+            </NumberInput>
+          </FormControl>
+        </Stack>
+
+        <SimpleGrid columns={3} spacing={2} bg={subtleBg} borderRadius="20px" p={2}>
+          {MONTHS.map((month, index) => (
+            <Button
+              key={month}
+              size="sm"
+              minW={0}
+              px={2}
+              colorScheme={selected.month === index + 1 ? "brand" : "gray"}
+              variant={selected.month === index + 1 ? "solid" : "outline"}
+              onClick={() => setSelected({ ...selected, month: index + 1 })}
+            >
+              {month}
+            </Button>
+          ))}
+        </SimpleGrid>
+      </Stack>
+    </HeroCard>
+  );
+
   return (
     <Box minH="100vh" py={{ base: 3, md: 5 }}>
-      <Container maxW="1280px">
-        <Stack spacing={4}>
-          <HeroCard p={{ base: 4, md: 5 }}>
-            <Stack spacing={4}>
-              <HStack justify="space-between" align="flex-start" flexWrap="wrap" gap={3}>
-                <Stack spacing={1}>
-                  <HStack flexWrap="wrap">
-                    <Badge colorScheme="brand" borderRadius="full" px={3} py={1}>
-                      Dashboard financeiro
-                    </Badge>
-                    <Badge colorScheme={urgency.colorScheme} borderRadius="full" px={3} py={1}>
-                      {urgency.label}
-                    </Badge>
-                  </HStack>
-                  <Heading size={{ base: "md", md: "lg" }}>Bem-vindo, {user.email}</Heading>
-                  <Text color={mutedText} fontSize="sm">
-                    {timeLabel}
-                  </Text>
-                </Stack>
-                <HStack>
-                  <IconButton
-                    aria-label="Alternar tema"
-                    icon={colorMode === "light" ? <MoonIcon /> : <SunIcon />}
-                    variant="outline"
-                    onClick={toggleColorMode}
-                  />
-                  <Menu>
-                    <MenuButton as={Button} colorScheme="brand" variant="outline">
-                      {user.email}
-                    </MenuButton>
-                    <MenuList>
-                      <MenuItem onClick={profileModal.onOpen}>Editar usuário e senha</MenuItem>
-                      <MenuItem color="rose.500" onClick={onLogout}>
-                        Sair
-                      </MenuItem>
-                    </MenuList>
-                  </Menu>
-                </HStack>
-              </HStack>
-
-              <SimpleGrid columns={{ base: 2, xl: 4 }} spacing={2}>
-                <SummaryCard label="Salario" value={formatMoney(salary)} help={monthLabel} colorScheme="mint" />
-                <SummaryCard label="Gastos" value={formatMoney(summary.total)} help={`${expenses.length} despesa(s)`} colorScheme="peach" />
-                <SummaryCard
-                  label="Saldo previsto"
-                  value={formatMoney(summary.balance)}
-                  help={`Dia ${formatMoney(summary.dailyBalance)}`}
-                  colorScheme={summary.balance >= 0 ? "sky" : "rose"}
-                />
-                <SummaryCard label="Dividas totais" value={formatMoney(totalDebtBalance)} help="Renegociar" colorScheme="lavender" />
-              </SimpleGrid>
-            </Stack>
-          </HeroCard>
+      <Container maxW="1760px">
+        <Grid
+          templateColumns={{ base: "1fr", xl: "minmax(230px, 300px) minmax(0, 1fr) minmax(230px, 300px)" }}
+          gap={4}
+          alignItems="start"
+        >
+          <Stack spacing={4}>{welcomePanel}</Stack>
 
           <HeroCard p={{ base: 4, md: 5 }}>
-            <Stack spacing={3}>
-              <HStack justify="space-between" align="flex-start" flexWrap="wrap" gap={3}>
-                <Box>
-                  <Text fontWeight="800">Pasta do mês</Text>
-                  <Text color={softText}>{monthLabel}</Text>
-                </Box>
-                <HStack>
-                  <Button size="xs" variant="outline" colorScheme="brand" onClick={copyToNextMonth}>
-                    Copiar para próximo mês
-                  </Button>
-                  <Box fontSize="2xl">📁</Box>
-                </HStack>
-              </HStack>
-              <HStack align="end" flexWrap="wrap" gap={3}>
-                <FormControl maxW={{ base: "100%", sm: "160px" }}>
-                  <FormLabel fontSize="sm">Ano</FormLabel>
-                <Select value={selected.year} onChange={(event) => setSelected({ ...selected, year: Number(event.target.value) })}>
-                  {yearOptions.map((year) => (
-                    <option key={year} value={year}>
-                      {year}
-                    </option>
-                  ))}
-                </Select>
-              </FormControl>
-                <FormControl maxW={{ base: "100%", sm: "220px" }}>
-                  <FormLabel fontSize="sm">Salário mensal</FormLabel>
-                  <NumberInput value={salary} min={0} onChange={(_, value) => persistSalary(Number.isNaN(value) ? 0 : value)}>
-                    <NumberInputField placeholder="3000" />
-                  </NumberInput>
-                </FormControl>
-              </HStack>
-              <ButtonGroup flexWrap="wrap" spacing={2} gap={2} bg={subtleBg} borderRadius="20px" p={2}>
-                {MONTHS.map((month, index) => (
-                  <Button
-                    key={month}
-                    size="sm"
-                    colorScheme={selected.month === index + 1 ? "brand" : "gray"}
-                    variant={selected.month === index + 1 ? "solid" : "outline"}
-                    onClick={() => setSelected({ ...selected, month: index + 1 })}
-                  >
-                    {month}
-                  </Button>
-                ))}
-              </ButtonGroup>
-            </Stack>
-          </HeroCard>
-
-            <HeroCard p={{ base: 4, md: 5 }}>
               <Stack spacing={4}>
                 <HStack justify="space-between" align="center" flexWrap="wrap" gap={3}>
                   <Box>
@@ -450,6 +564,22 @@ export default function Dashboard({ user, onUserUpdate, onLogout }) {
                     <Text color="gray.500">{monthLabel}</Text>
                   </Box>
                   <HStack flexWrap="wrap">
+                    <Menu closeOnSelect={false}>
+                      <MenuButton as={Button} size="sm" variant="outline" colorScheme="brand" leftIcon={<SettingsIcon />}>
+                        Colunas
+                      </MenuButton>
+                      <MenuList>
+                        {expenseColumns.map((column) => (
+                          <MenuItem
+                            key={column.key}
+                            icon={visibleExpenseColumns.includes(column.key) ? <CheckIcon /> : undefined}
+                            onClick={() => toggleExpenseColumn(column.key)}
+                          >
+                            {column.label}
+                          </MenuItem>
+                        ))}
+                      </MenuList>
+                    </Menu>
                     <Select size="sm" w={{ base: "100%", sm: "180px" }} value={sortMode} onChange={(event) => setSortMode(event.target.value)}>
                       <option value="dueDate">Ordenar: vencimento</option>
                       <option value="name">Ordenar: A-Z</option>
@@ -521,14 +651,14 @@ export default function Dashboard({ user, onUserUpdate, onLogout }) {
                     <Thead>
                       <Tr>
                         <Th>Despesa</Th>
-                        <Th>Categoria</Th>
-                        <Th isNumeric>Valor</Th>
-                        <Th isNumeric>Divida total</Th>
-                        <Th>Vencimento</Th>
-                        <Th>Parcela</Th>
-                        <Th>Status</Th>
-                        <Th>Observação</Th>
-                        <Th>Acoes</Th>
+                        {expenseColumns
+                          .filter((column) => visibleExpenseColumns.includes(column.key))
+                          .map((column) => (
+                            <Th key={column.key} isNumeric={column.numeric} textAlign={column.key === "installment" ? "center" : undefined}>
+                              {column.label}
+                            </Th>
+                          ))}
+                        <Th textAlign="center">Ações</Th>
                       </Tr>
                     </Thead>
                     <Tbody>
@@ -537,38 +667,16 @@ export default function Dashboard({ user, onUserUpdate, onLogout }) {
 
                         return (
                           <Tr key={expense.id}>
-                            <Td fontWeight="700">{expense.name}</Td>
-                            <Td>{expense.category || "—"}</Td>
-                            <Td isNumeric>{formatMoney(expense.value)}</Td>
-                            <Td isNumeric>{expense.debtBalance ? formatMoney(expense.debtBalance) : "—"}</Td>
-                            <Td>{expense.dueDate ? `Dia ${expense.dueDate}` : "—"}</Td>
-                            <Td>{expense.installment || "—"}</Td>
-                            <Td minW="170px">
-                              <Stack spacing={1}>
-                                <Badge alignSelf="flex-start" colorScheme={statusView.colorScheme} borderRadius="full" px={2}>
-                                  {statusView.label}
-                                </Badge>
-                                <Select
-                                  size="sm"
-                                  value={expense.status || "aguardando"}
-                                  bg={statusView.bg}
-                                  color={statusView.color}
-                                  fontWeight="800"
-                                  onChange={(event) => updateStatus(expense.id, event.target.value)}
-                                >
-                                  {STATUSES.map((status) => (
-                                    <option key={status} value={status}>
-                                      {STATUS_LABELS[status]}
-                                    </option>
-                                  ))}
-                                </Select>
-                              </Stack>
+                            <Td fontWeight="700" minW="130px">
+                              {expense.name}
                             </Td>
-                            <Td maxW="280px" whiteSpace="normal">
-                              {expense.note || "—"}
-                            </Td>
-                            <Td>
-                              <HStack>
+                            {expenseColumns
+                              .filter((column) => visibleExpenseColumns.includes(column.key))
+                              .map((column) => (
+                                <Fragment key={column.key}>{renderExpenseCell(expense, column.key, statusView)}</Fragment>
+                              ))}
+                            <Td textAlign="center">
+                              <HStack justify="center" spacing={1}>
                                 <IconButton
                                   aria-label="Subir"
                                   icon={<ChevronUpIcon />}
@@ -606,7 +714,9 @@ export default function Dashboard({ user, onUserUpdate, onLogout }) {
                 </TableContainer>
               </Stack>
             </HeroCard>
-        </Stack>
+
+          <Stack spacing={4}>{monthPanel}</Stack>
+        </Grid>
       </Container>
 
       <Modal isOpen={expenseModal.isOpen} onClose={expenseModal.onClose} isCentered size="xl">

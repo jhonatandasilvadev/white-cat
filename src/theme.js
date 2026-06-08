@@ -6,8 +6,8 @@ const theme = extendTheme({
     useSystemColorMode: false,
   },
   fonts: {
-    heading: "Manrope, system-ui, sans-serif",
-    body: "Manrope, system-ui, sans-serif",
+    heading: '"Segoe UI", Inter, system-ui, sans-serif',
+    body: '"Segoe UI", Inter, system-ui, sans-serif',
   },
   colors: {
     brand: {
