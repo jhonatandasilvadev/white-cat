@@ -337,8 +337,22 @@ export default function Dashboard({ user, onUserUpdate, onLogout }) {
     }
 
     if (editingId) {
-      persistExpenses(expenses.map((expense) => (expense.id === editingId ? makeExpense(normalized, editingId) : expense)));
-      notify({ status: "success", title: "Despesa atualizada" });
+      const editedExpense = makeExpense(normalized, editingId);
+      const recurringDrafts = repeatMonthly ? generateRecurringDrafts(form, selected, { fixed: repeatFixed, months: repeatMonths }).slice(1) : [];
+      const generatedErrors = validateDraftsForSave(recurringDrafts);
+
+      if (generatedErrors.length > 0) {
+        notify({ status: "warning", title: "Revise a despesa", description: generatedErrors[0] });
+        return;
+      }
+
+      persistExpenses(expenses.map((expense) => (expense.id === editingId ? editedExpense : expense)));
+      if (repeatMonthly) {
+        const count = saveDraftsAcrossMonths(recurringDrafts);
+        notify({ status: "success", title: "Despesa atualizada", description: `${count + 1} lançamento(s) salvos.` });
+      } else {
+        notify({ status: "success", title: "Despesa atualizada" });
+      }
     } else {
       const generatedDrafts =
         normalized.debtBalance && form.installment
@@ -367,6 +381,7 @@ export default function Dashboard({ user, onUserUpdate, onLogout }) {
 
   function editExpense(expense) {
     setEditingId(expense.id);
+    setExpenseTab(0);
     setForm({
       name: expense.name,
       category: expense.category || "Outros",
@@ -675,8 +690,8 @@ export default function Dashboard({ user, onUserUpdate, onLogout }) {
   );
 
   return (
-    <Box minH="100vh" py={{ base: 3, md: 5 }}>
-      <Container maxW="1760px">
+    <Box minH="100vh" py={{ base: 3, md: 5 }} display="flex" flexDirection="column">
+      <Container maxW="1760px" flex="1" w="100%">
         <Grid
           templateColumns={{ base: "1fr", xl: "minmax(230px, 300px) minmax(0, 1fr) minmax(230px, 300px)" }}
           gap={4}
@@ -847,6 +862,21 @@ export default function Dashboard({ user, onUserUpdate, onLogout }) {
         </Grid>
       </Container>
 
+      <Box as="footer" textAlign="center" color={softText} fontSize="sm" pt={4} pb={1} px={4}>
+        Desenvolvido por{" "}
+        <Box
+          as="a"
+          href="https://ds-devforge.vercel.app/"
+          target="_blank"
+          rel="noopener noreferrer"
+          color="brand.500"
+          fontWeight="800"
+        >
+          DS Devforge
+        </Box>
+        , com carinho.
+      </Box>
+
       <Modal isOpen={expenseModal.isOpen} onClose={expenseModal.onClose} isCentered size="6xl">
         <ModalOverlay />
         <ModalContent borderRadius="24px">
@@ -911,7 +941,7 @@ export default function Dashboard({ user, onUserUpdate, onLogout }) {
                       </FormControl>
                     </SimpleGrid>
                     <Stack spacing={3} bg={subtleBg} borderRadius="18px" p={4}>
-                      <Checkbox isChecked={repeatMonthly} onChange={(event) => setRepeatMonthly(event.target.checked)} isDisabled={editingId}>
+                      <Checkbox isChecked={repeatMonthly} onChange={(event) => setRepeatMonthly(event.target.checked)}>
                         Repetir todo mês
                       </Checkbox>
                       {repeatMonthly ? (
