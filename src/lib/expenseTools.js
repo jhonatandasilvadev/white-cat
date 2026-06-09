@@ -137,7 +137,6 @@ export function generateInstallmentDrafts(baseDraft, selected) {
       dueYear: target.year,
       dueMonth: target.month,
       installment: `${index + 1}/${count}`,
-      name: `${normalized.name} ${index + 1}/${count}`,
     };
   });
 }

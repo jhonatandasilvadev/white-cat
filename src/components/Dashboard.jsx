@@ -77,8 +77,6 @@ import {
   makeExpense,
   normalizeExpenseDraft,
   normalizeImportedDraft,
-  parseCsvExpenses,
-  parseTextExpenses,
   validateExpenseDraft,
 } from "../lib/expenseTools.js";
 
@@ -134,8 +132,6 @@ export default function Dashboard({ user, onUserUpdate, onLogout }) {
   const [repeatFixed, setRepeatFixed] = useState(false);
   const [repeatMonths, setRepeatMonths] = useState(3);
   const [bulkRows, setBulkRows] = useState([{ ...emptyBulkRow }, { ...emptyBulkRow }, { ...emptyBulkRow }]);
-  const [textImport, setTextImport] = useState("");
-  const [csvImport, setCsvImport] = useState("");
   const [importPreview, setImportPreview] = useState([]);
   const [previewTitle, setPreviewTitle] = useState("");
   const [visibleExpenseColumns, setVisibleExpenseColumns] = useState(() => {
@@ -292,8 +288,6 @@ export default function Dashboard({ user, onUserUpdate, onLogout }) {
 
     const count = saveDraftsAcrossMonths(importPreview);
     clearImportPreview();
-    setTextImport("");
-    setCsvImport("");
     setBulkRows([{ ...emptyBulkRow }, { ...emptyBulkRow }, { ...emptyBulkRow }]);
     expenseModal.onClose();
     notify({ status: "success", title: "Despesas adicionadas", description: `${count} despesa(s) salvas.` });
@@ -438,18 +432,20 @@ export default function Dashboard({ user, onUserUpdate, onLogout }) {
     const next = getNextMonth(selected.year, selected.month);
     const nextExpenses = getExpenses(user.email, next.year, next.month);
     const nextMonthLabel = formatMonthYear(next.year, next.month);
+    const copied = expenses
+      .filter((expense) => !nextExpenses.some((nextExpense) => isSameCopiedExpense(expense, nextExpense)))
+      .map((expense, index) => ({ ...expense, id: Date.now() + index, status: "aguardando" }));
 
-    if (nextExpenses.length > 0) {
+    if (copied.length === 0) {
       notify({
-        status: "warning",
-        title: "Próximo mês já tem despesas",
-        description: `${nextMonthLabel} já possui lançamentos. Use "Copiar despesas de outro mês" para substituir ou somar.`,
+        status: "info",
+        title: "Nada novo para copiar",
+        description: `${nextMonthLabel} já possui todas as despesas de ${monthLabel}.`,
       });
       return;
     }
 
-    const copied = expenses.map((expense, index) => ({ ...expense, id: Date.now() + index, status: "aguardando" }));
-    saveExpenses(user.email, next.year, next.month, copied);
+    saveExpenses(user.email, next.year, next.month, [...nextExpenses, ...copied]);
 
     if (!getSalary(user.email, next.year, next.month)) {
       saveSalary(user.email, next.year, next.month, salary);
@@ -458,7 +454,7 @@ export default function Dashboard({ user, onUserUpdate, onLogout }) {
     notify({
       status: "success",
       title: "Copiado para o próximo mês",
-      description: `${copied.length} despesa(s) de ${monthLabel} foram enviadas para ${nextMonthLabel}.`,
+      description: `${copied.length} despesa(s) faltante(s) de ${monthLabel} foram adicionadas em ${nextMonthLabel}.`,
     });
   }
 
@@ -487,38 +483,6 @@ export default function Dashboard({ user, onUserUpdate, onLogout }) {
     }
 
     showPreview("Prévia das despesas em massa", drafts);
-  }
-
-  function previewTextImport() {
-    const drafts = parseTextExpenses(textImport, selected);
-    if (drafts.length === 0) {
-      notify({ status: "warning", title: "Nada para interpretar", description: "Cole uma despesa por linha." });
-      return;
-    }
-
-    showPreview("Prévia do texto importado", drafts);
-  }
-
-  function previewCsvImport() {
-    const drafts = parseCsvExpenses(csvImport, selected);
-    if (drafts.length === 0) {
-      notify({ status: "warning", title: "CSV vazio", description: "Use o cabeçalho descricao,categoria,valor,vencimento,status,observacao." });
-      return;
-    }
-
-    showPreview("Prévia do CSV importado", drafts);
-  }
-
-  function handleCsvFile(event) {
-    const file = event.target.files?.[0];
-    if (!file) {
-      return;
-    }
-
-    file.text().then((content) => {
-      setCsvImport(content);
-      clearImportPreview();
-    });
   }
 
   function getExpenseStatusView(expense) {
@@ -795,7 +759,7 @@ export default function Dashboard({ user, onUserUpdate, onLogout }) {
                         <HStack justify="space-between" align="center" gap={3}>
                           <Box minW={0} flex="1">
                             <Text fontWeight="800" noOfLines={1}>
-                              {expense.name}
+                              {getDisplayExpenseName(expense)}
                             </Text>
                             <Badge colorScheme={statusView.colorScheme} borderRadius="full" px={2} mt={1}>
                               {statusView.label}
@@ -832,7 +796,7 @@ export default function Dashboard({ user, onUserUpdate, onLogout }) {
                         return (
                           <Tr key={expense.id}>
                             <Td fontWeight="700" minW="130px">
-                              {expense.name}
+                              {getDisplayExpenseName(expense)}
                             </Td>
                             {expenseColumns
                               .filter((column) => visibleExpenseColumns.includes(column.key))
@@ -893,8 +857,6 @@ export default function Dashboard({ user, onUserUpdate, onLogout }) {
               <TabList flexWrap="wrap">
                 <Tab>Individual</Tab>
                 <Tab>Várias despesas</Tab>
-                <Tab>Importar texto</Tab>
-                <Tab>CSV</Tab>
               </TabList>
               <TabPanels>
                 <TabPanel px={0}>
@@ -1019,27 +981,6 @@ export default function Dashboard({ user, onUserUpdate, onLogout }) {
                     <ImportPreview title={previewTitle} drafts={importPreview} />
                   </Stack>
                 </TabPanel>
-                <TabPanel px={0}>
-                  <Stack spacing={4}>
-                    <Textarea minH="180px" value={textImport} onChange={(event) => { setTextImport(event.target.value); clearImportPreview(); }} placeholder={"Internet Vivo 160 vence dia 10\nAluguel 1000 vence dia 5"} />
-                    <Button alignSelf="flex-start" colorScheme="brand" onClick={previewTextImport}>Interpretar texto</Button>
-                    <ImportPreview title={previewTitle} drafts={importPreview} />
-                  </Stack>
-                </TabPanel>
-                <TabPanel px={0}>
-                  <Stack spacing={4}>
-                    <HStack flexWrap="wrap">
-                      <Button as="label" size="sm" variant="outline" colorScheme="brand" cursor="pointer">
-                        Importar CSV
-                        <Input type="file" accept=".csv,text/csv" display="none" onChange={handleCsvFile} />
-                      </Button>
-                      <Text color={softText} fontSize="sm">Cabeçalho: descricao,categoria,valor,vencimento,status,observacao</Text>
-                    </HStack>
-                    <Textarea minH="180px" value={csvImport} onChange={(event) => { setCsvImport(event.target.value); clearImportPreview(); }} placeholder={"descricao,categoria,valor,vencimento,status,observacao\nInternet,Internet,\"160,50\",10,aguardando,"} />
-                    <Button alignSelf="flex-start" colorScheme="brand" onClick={previewCsvImport}>Validar CSV</Button>
-                    <ImportPreview title={previewTitle} drafts={importPreview} />
-                  </Stack>
-                </TabPanel>
               </TabPanels>
             </Tabs>
           </ModalBody>
@@ -1093,6 +1034,74 @@ export default function Dashboard({ user, onUserUpdate, onLogout }) {
       </Modal>
     </Box>
   );
+}
+
+function isSameCopiedExpense(source, target) {
+  if (getExpenseIdentity(source) === getExpenseIdentity(target)) {
+    return true;
+  }
+
+  const sourceSeries = getInstallmentSeriesIdentity(source);
+  const targetSeries = getInstallmentSeriesIdentity(target);
+  return Boolean(sourceSeries && targetSeries && sourceSeries === targetSeries);
+}
+
+function getDisplayExpenseName(expense) {
+  const name = String(expense.name || "").trim();
+  const installment = String(expense.installment || "").trim();
+
+  if (!installment) {
+    return name;
+  }
+
+  return name.replace(new RegExp(`\\s+${escapeRegExp(installment)}$`), "");
+}
+
+function getExpenseIdentity(expense) {
+  return [
+    normalizeIdentityText(expense.name),
+    normalizeIdentityText(expense.category || "Outros"),
+    toMoneyCents(expense.value),
+    Number(expense.dueDate || 0),
+    normalizeIdentityText(expense.installment),
+  ].join("|");
+}
+
+function getInstallmentSeriesIdentity(expense) {
+  const installment = String(expense.installment || "").trim();
+  const installmentMatch = installment.match(/^(\d+)\s*\/\s*(\d+)$/);
+  const nameMatch = String(expense.name || "").trim().match(/^(.*?)\s+\d+\s*\/\s*(\d+)$/);
+  const total = installmentMatch?.[2] || nameMatch?.[2];
+
+  if (!total) {
+    return "";
+  }
+
+  const baseName = nameMatch?.[1] || expense.name;
+  return [
+    normalizeIdentityText(baseName),
+    normalizeIdentityText(expense.category || "Outros"),
+    toMoneyCents(expense.value),
+    Number(expense.dueDate || 0),
+    total,
+  ].join("|");
+}
+
+function normalizeIdentityText(value) {
+  return String(value || "")
+    .trim()
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/\s+/g, " ");
+}
+
+function toMoneyCents(value) {
+  return Math.round(Number(value || 0) * 100);
+}
+
+function escapeRegExp(value) {
+  return String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 function SummaryCard({ label, value, help, colorScheme = "brand" }) {
