@@ -1,4 +1,10 @@
 import {
+  AlertDialog,
+  AlertDialogBody,
+  AlertDialogContent,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogOverlay,
   Badge,
   Box,
   Button,
@@ -9,8 +15,11 @@ import {
   Grid,
   Heading,
   HStack,
+  Icon,
   IconButton,
   Input,
+  InputGroup,
+  InputRightElement,
   Menu,
   MenuButton,
   MenuItem,
@@ -49,17 +58,28 @@ import {
   useColorModeValue,
   useDisclosure,
 } from "@chakra-ui/react";
-import { AddIcon, CheckIcon, DeleteIcon, EditIcon, MoonIcon, SettingsIcon, SunIcon } from "@chakra-ui/icons";
+import { AddIcon, CheckIcon, DeleteIcon, EditIcon, MoonIcon, SettingsIcon, SunIcon, ViewIcon, ViewOffIcon } from "@chakra-ui/icons";
 import { ChevronDownIcon, ChevronUpIcon } from "@chakra-ui/icons";
-import { Fragment, useEffect, useMemo, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import HeroCard from "./HeroCard.jsx";
+import AdminDashboard from "./AdminDashboard.jsx";
 import { notify } from "../toast.js";
+import {
+  getLegacyMigrationSummary,
+  loadAllFinanceMonths,
+  loadFinanceMonth,
+  migrateLegacyAccount,
+  saveFinanceMonth,
+} from "../lib/cloudFinance.js";
+import { ADMIN_EMAIL, ADMIN_USERNAME, normalizeUsername, supabase, usernameToAuthEmail } from "../lib/supabase.js";
+import { clearLegacySession } from "../lib/legacyAuth.js";
 import {
   calculateSummary,
   CATEGORIES,
   formatMoney,
   formatMonthYear,
   getBrasiliaDate,
+  getCanonicalCategory,
   getCurrentTimeLabel,
   getNextMonth,
   MONTHS,
@@ -67,8 +87,7 @@ import {
   STATUSES,
   STATUS_LABELS,
 } from "../lib/finance.js";
-import { getExpenses, getSalary, getUsers, migrateFinanceKeys, saveExpenses, saveSalary, saveUsers, setLoggedUser } from "../lib/storage.js";
-import { seedAprilIfNeeded } from "../lib/migrateLegacy.js";
+import { getAllLocalFinanceMonths, getExpenses, getSalary, saveExpenses, saveSalary } from "../lib/storage.js";
 import {
   FIXED_RECURRENCE_MONTHS,
   generateInstallmentDrafts,
@@ -82,18 +101,19 @@ import {
 
 const emptyForm = {
   name: "",
-  category: "Outros",
+  category: "",
   value: "",
   dueDate: "",
   installment: "",
   status: "aguardando",
   debtBalance: "",
   note: "",
+  seriesId: "",
 };
 
 const emptyBulkRow = {
   name: "",
-  category: "Outros",
+  category: "",
   value: "",
   dueDate: "",
   status: "aguardando",
@@ -119,6 +139,26 @@ export default function Dashboard({ user, onUserUpdate, onLogout }) {
   const subtleBg = useColorModeValue("whiteAlpha.700", "whiteAlpha.100");
   const mobileItemBg = useColorModeValue("whiteAlpha.800", "whiteAlpha.100");
   const mobileItemBorder = useColorModeValue("gray.100", "whiteAlpha.200");
+  const logoutBg = useColorModeValue("rose.50", "rgba(159, 18, 57, 0.24)");
+  const logoutBorder = useColorModeValue("rose.200", "rose.700");
+  const logoutColor = useColorModeValue("rose.700", "rose.200");
+  const userDisplayBg = useColorModeValue("brand.50", "whiteAlpha.100");
+  const userDisplayBorder = useColorModeValue("brand.100", "whiteAlpha.200");
+  const paidStatus = {
+    bg: useColorModeValue("mint.50", "rgba(20, 107, 66, 0.35)"),
+    border: useColorModeValue("mint.300", "mint.600"),
+    color: useColorModeValue("mint.800", "mint.100"),
+  };
+  const unpaidStatus = {
+    bg: useColorModeValue("peach.50", "rgba(127, 47, 15, 0.34)"),
+    border: useColorModeValue("peach.300", "peach.600"),
+    color: useColorModeValue("peach.900", "peach.100"),
+  };
+  const overdueStatus = {
+    bg: useColorModeValue("rose.50", "rgba(136, 19, 55, 0.34)"),
+    border: useColorModeValue("rose.300", "rose.600"),
+    color: useColorModeValue("rose.800", "rose.100"),
+  };
   const brasiliaNow = getBrasiliaDate();
   const [selected, setSelected] = useState({ year: brasiliaNow.getFullYear(), month: brasiliaNow.getMonth() + 1 });
   const [timeLabel, setTimeLabel] = useState(getCurrentTimeLabel());
@@ -146,9 +186,27 @@ export default function Dashboard({ user, onUserUpdate, onLogout }) {
       return defaultExpenseColumns;
     }
   });
-  const [profileForm, setProfileForm] = useState({ email: user.email, password: user.password || "" });
+  const [profileForm, setProfileForm] = useState({ username: user.username || "", password: "" });
   const expenseModal = useDisclosure();
   const profileModal = useDisclosure();
+  const cancelConfirmationRef = useRef();
+  const salarySyncRef = useRef();
+  const installmentRepairRef = useRef("");
+  const salaryRef = useRef(0);
+  const expensesRef = useRef([]);
+  const [confirmation, setConfirmation] = useState(null);
+  const [destructiveLoading, setDestructiveLoading] = useState(false);
+  const adminModal = useDisclosure();
+  const legacyModal = useDisclosure();
+  const migrationSuccessModal = useDisclosure();
+  const initialLegacySummary = user.legacy ? null : getLegacyMigrationSummary(user.id, user.username);
+  const [legacySummary, setLegacySummary] = useState(initialLegacySummary);
+  const [legacyForm, setLegacyForm] = useState(() => ({
+    username: user.legacy ? user.username : initialLegacySummary?.username || "",
+    password: user.legacy ? user.legacyPassword : "",
+  }));
+  const [showLegacyPassword, setShowLegacyPassword] = useState(false);
+  const [migratingLegacy, setMigratingLegacy] = useState(false);
 
   const currentYear = brasiliaNow.getFullYear();
   const currentMonth = brasiliaNow.getMonth() + 1;
@@ -161,22 +219,63 @@ export default function Dashboard({ user, onUserUpdate, onLogout }) {
   }, []);
 
   useEffect(() => {
-    if (selected.year === 2026 && selected.month === 4) {
-      seedAprilIfNeeded(user.email);
+    let active = true;
+    if (user.legacy) {
+      const localSalary = getSalary(user.email, selected.year, selected.month);
+      const localExpenses = getExpenses(user.email, selected.year, selected.month);
+      salaryRef.current = localSalary;
+      expensesRef.current = localExpenses;
+      setSalary(localSalary);
+      setExpenses(localExpenses);
+      setEditingId(null);
+      setForm(emptyForm);
+      return () => { active = false; };
     }
-    setSalary(getSalary(user.email, selected.year, selected.month));
-    setExpenses(getExpenses(user.email, selected.year, selected.month));
+    loadFinanceMonth(user, selected.year, selected.month)
+      .then((monthData) => {
+        if (!active) return;
+        salaryRef.current = monthData.salary;
+        expensesRef.current = monthData.expenses;
+        setSalary(monthData.salary);
+        setExpenses(monthData.expenses);
+      })
+      .catch((error) => notify({ status: "error", title: "Erro ao carregar o mês", description: error.message }));
     setEditingId(null);
     setForm(emptyForm);
-  }, [selected, user.email]);
+    return () => { active = false; };
+  }, [selected, user]);
 
   useEffect(() => {
-    setProfileForm({ email: user.email, password: user.password || "" });
+    setProfileForm({ username: user.username || "", password: "" });
   }, [user]);
 
+  useEffect(() => {
+    if (installmentRepairRef.current === user.id) return;
+    installmentRepairRef.current = user.id;
+    repairStalledInstallments().catch((error) => {
+      installmentRepairRef.current = "";
+      notify({ status: "error", title: "Não foi possível atualizar as parcelas antigas", description: error.message });
+    });
+  }, [user.id]);
+
+  useEffect(() => {
+    if (!user.legacy && !legacySummary) return;
+    const noticeKey = `legacy_migration_notice_${user.id}`;
+    if (!sessionStorage.getItem(noticeKey)) {
+      sessionStorage.setItem(noticeKey, "shown");
+      legacyModal.onOpen();
+    }
+  }, [legacySummary, user.id, user.legacy]);
+
+  useEffect(() => {
+    if (sessionStorage.getItem("whitecat_migration_success") !== "true") return;
+    sessionStorage.removeItem("whitecat_migration_success");
+    migrationSuccessModal.onOpen();
+  }, []);
+
   const summary = useMemo(() => calculateSummary(salary, expenses), [salary, expenses]);
-  const totalDebtBalance = useMemo(
-    () => expenses.reduce((sum, expense) => sum + Number(expense.debtBalance || 0), 0),
+  const unpaidTotal = useMemo(
+    () => expenses.filter((expense) => expense.status !== "pago").reduce((sum, expense) => sum + Number(expense.value || 0), 0),
     [expenses],
   );
   const sortedExpenses = useMemo(() => {
@@ -201,6 +300,13 @@ export default function Dashboard({ user, onUserUpdate, onLogout }) {
       return [...expenses].sort((a, b) => (order[a.status] ?? 9) - (order[b.status] ?? 9));
     }
 
+    if (sortMode === "category") {
+      return [...expenses].sort((a, b) => {
+        const byCategory = getCanonicalCategory(a.category).localeCompare(getCanonicalCategory(b.category), "pt-BR");
+        return byCategory || String(a.name || "").localeCompare(String(b.name || ""), "pt-BR");
+      });
+    }
+
     return sortExpenses(expenses);
   }, [expenses, sortMode]);
   const viewingCurrentMonth = selected.year === currentYear && selected.month === currentMonth;
@@ -212,14 +318,29 @@ export default function Dashboard({ user, onUserUpdate, onLogout }) {
       ? { label: "Contas vencendo hoje", colorScheme: "peach" }
       : { label: "Nenhuma urgência hoje", colorScheme: "mint" };
 
-  function persistExpenses(nextExpenses) {
+  async function persistExpenses(nextExpenses) {
+    expensesRef.current = nextExpenses;
     setExpenses(nextExpenses);
     saveExpenses(user.email, selected.year, selected.month, nextExpenses);
+    if (user.legacy) return;
+    try {
+      await saveFinanceMonth(user.id, selected.year, selected.month, salaryRef.current, nextExpenses);
+    } catch (error) {
+      notify({ status: "error", title: "Falha ao sincronizar", description: error.message });
+    }
   }
 
   function persistSalary(value) {
-    setSalary(Number(value || 0));
-    saveSalary(user.email, selected.year, selected.month, Number(value || 0));
+    const nextSalary = Number(value || 0);
+    salaryRef.current = nextSalary;
+    setSalary(nextSalary);
+    saveSalary(user.email, selected.year, selected.month, nextSalary);
+    if (user.legacy) return;
+    window.clearTimeout(salarySyncRef.current);
+    salarySyncRef.current = window.setTimeout(() => {
+      saveFinanceMonth(user.id, selected.year, selected.month, nextSalary, expensesRef.current)
+        .catch((error) => notify({ status: "error", title: "Falha ao sincronizar salário", description: error.message }));
+    }, 500);
   }
 
   function saveVisibleExpenseColumns(nextColumns) {
@@ -245,22 +366,29 @@ export default function Dashboard({ user, onUserUpdate, onLogout }) {
     setPreviewTitle("");
   }
 
-  function saveDraftsAcrossMonths(drafts) {
+  async function saveDraftsAcrossMonths(drafts) {
     const groups = groupDraftsByMonth(drafts);
     let createdCount = 0;
 
-    Object.values(groups).forEach((group) => {
+    for (const group of Object.values(groups)) {
       const currentGroup = group.year === selected.year && group.month === selected.month;
-      const existingExpenses = currentGroup ? expenses : getExpenses(user.email, group.year, group.month);
+      const monthData = currentGroup
+        ? { salary, expenses }
+        : user.legacy
+          ? { salary: getSalary(user.email, group.year, group.month), expenses: getExpenses(user.email, group.year, group.month) }
+          : await loadFinanceMonth(user, group.year, group.month);
+      const existingExpenses = monthData.expenses;
       const createdExpenses = group.drafts.map((draft, index) => makeExpense(draft, Date.now() + createdCount + index));
       createdCount += createdExpenses.length;
+      const nextExpenses = [...existingExpenses, ...createdExpenses];
 
       if (currentGroup) {
-        persistExpenses([...existingExpenses, ...createdExpenses]);
+        await persistExpenses(nextExpenses);
       } else {
-        saveExpenses(user.email, group.year, group.month, [...existingExpenses, ...createdExpenses]);
+        saveExpenses(user.email, group.year, group.month, nextExpenses);
+        if (!user.legacy) await saveFinanceMonth(user.id, group.year, group.month, monthData.salary, nextExpenses);
       }
-    });
+    }
 
     return createdCount;
   }
@@ -279,54 +407,105 @@ export default function Dashboard({ user, onUserUpdate, onLogout }) {
     }
   }
 
-  function confirmPreview() {
+  async function confirmPreview() {
     const errors = validateDraftsForSave(importPreview);
     if (errors.length > 0) {
       notify({ status: "warning", title: "Corrija antes de salvar", description: errors[0] });
       return;
     }
 
-    const count = saveDraftsAcrossMonths(importPreview);
+    const count = await saveDraftsAcrossMonths(importPreview);
     clearImportPreview();
     setBulkRows([{ ...emptyBulkRow }, { ...emptyBulkRow }, { ...emptyBulkRow }]);
     expenseModal.onClose();
     notify({ status: "success", title: "Despesas adicionadas", description: `${count} despesa(s) salvas.` });
   }
 
-  function handleProfileSubmit(event) {
+  async function handleProfileSubmit(event) {
     event.preventDefault();
-    const nextEmail = profileForm.email.trim();
     const nextPassword = profileForm.password;
 
-    if (!nextEmail || !nextPassword) {
-      notify({ status: "warning", title: "Preencha os dados", description: "Usuário e senha são obrigatórios." });
+    if (!nextPassword || nextPassword.length < 6) {
+      notify({ status: "warning", title: "Revise a senha", description: "Use pelo menos 6 caracteres na nova senha." });
       return;
     }
 
-    const users = getUsers();
-    const emailTaken = users.some((savedUser) => savedUser.email === nextEmail && savedUser.email !== user.email);
-
-    if (emailTaken) {
-      notify({ status: "warning", title: "Usuário já existe", description: "Escolha outro usuário para continuar." });
+    const { data, error } = await supabase.auth.updateUser({ password: nextPassword });
+    if (error) {
+      notify({ status: "error", title: "Não foi possível atualizar", description: error.message });
       return;
     }
-
-    const nextUser = { email: nextEmail, password: nextPassword };
-    const nextUsers = users.map((savedUser) => (savedUser.email === user.email ? nextUser : savedUser));
-
-    if (!nextUsers.some((savedUser) => savedUser.email === nextEmail)) {
-      nextUsers.push(nextUser);
-    }
-
-    migrateFinanceKeys(user.email, nextEmail);
-    saveUsers(nextUsers);
-    setLoggedUser(nextUser);
-    onUserUpdate(nextUser);
+    onUserUpdate({ ...user, ...data.user, username: user.username, role: user.role });
     profileModal.onClose();
-    notify({ status: "success", title: "Perfil atualizado", description: "Seu usuário e senha foram salvos." });
+    notify({ status: "success", title: "Senha atualizada", description: "Use a nova senha no próximo acesso com seu usuário." });
   }
 
-  function handleSubmit(event) {
+  async function handleLegacyMigration(event) {
+    event.preventDefault();
+    setMigratingLegacy(true);
+    try {
+      const result = await migrateLegacyAccount(user, legacyForm.username, legacyForm.password);
+      setLegacySummary(null);
+      setLegacyForm({ username: "", password: "" });
+      legacyModal.onClose();
+      const monthData = await loadFinanceMonth(user, selected.year, selected.month);
+      salaryRef.current = monthData.salary;
+      expensesRef.current = monthData.expenses;
+      setSalary(monthData.salary);
+      setExpenses(monthData.expenses);
+      notify({
+        status: "success",
+        title: "Planilhas salvas na nuvem",
+        description: `${result.months} mês(es) e ${result.expenses} despesa(s) foram preservados.`,
+      });
+    } catch (error) {
+      notify({ status: "error", title: "Não foi possível migrar", description: error.message });
+    } finally {
+      setMigratingLegacy(false);
+    }
+  }
+
+  async function upgradeLegacyAccount(event) {
+    event.preventDefault();
+    if (legacyForm.username.trim() !== user.username || legacyForm.password !== user.legacyPassword) {
+      notify({ status: "error", title: "Usuário ou senha incorretos", description: "Digite os mesmos dados usados para entrar neste navegador." });
+      return;
+    }
+
+    setMigratingLegacy(true);
+    const localUsername = normalizeUsername(user.username);
+    const isOwner = localUsername === "john" || localUsername === ADMIN_USERNAME;
+    const cloudUsername = isOwner ? ADMIN_USERNAME : localUsername;
+    const authEmail = isOwner ? ADMIN_EMAIL : usernameToAuthEmail(cloudUsername);
+    let authResult = await supabase.auth.signInWithPassword({ email: authEmail, password: legacyForm.password });
+    if (authResult.error) {
+      authResult = await supabase.auth.signUp({
+        email: authEmail,
+        password: legacyForm.password,
+        options: { data: { username: cloudUsername } },
+      });
+    }
+    if (authResult.error || !authResult.data.session?.user) {
+      setMigratingLegacy(false);
+      notify({
+        status: "error",
+        title: "Não foi possível atualizar a conta",
+        description: getAccountUpgradeErrorMessage(authResult.error),
+      });
+      return;
+    }
+    try {
+      await migrateLegacyAccount(authResult.data.session.user, user.username, legacyForm.password);
+      clearLegacySession();
+      sessionStorage.setItem("whitecat_migration_success", "true");
+      window.location.reload();
+    } catch (error) {
+      setMigratingLegacy(false);
+      notify({ status: "error", title: "Não foi possível concluir a atualização", description: error.message });
+    }
+  }
+
+  async function handleSubmit(event) {
     event.preventDefault();
 
     const normalized = normalizeExpenseDraft(form, selected);
@@ -346,16 +525,16 @@ export default function Dashboard({ user, onUserUpdate, onLogout }) {
         return;
       }
 
-      persistExpenses(expenses.map((expense) => (expense.id === editingId ? editedExpense : expense)));
+      await persistExpenses(expenses.map((expense) => (expense.id === editingId ? editedExpense : expense)));
       if (repeatMonthly) {
-        const count = saveDraftsAcrossMonths(recurringDrafts);
+        const count = await saveDraftsAcrossMonths(recurringDrafts);
         notify({ status: "success", title: "Despesa atualizada", description: `${count + 1} lançamento(s) salvos.` });
       } else {
         notify({ status: "success", title: "Despesa atualizada" });
       }
     } else {
       const generatedDrafts =
-        normalized.debtBalance && form.installment
+        form.installment
           ? generateInstallmentDrafts(form, selected)
           : repeatMonthly
             ? generateRecurringDrafts(form, selected, { fixed: repeatFixed, months: repeatMonths })
@@ -367,7 +546,7 @@ export default function Dashboard({ user, onUserUpdate, onLogout }) {
         return;
       }
 
-      const count = saveDraftsAcrossMonths(generatedDrafts);
+      const count = await saveDraftsAcrossMonths(generatedDrafts);
       notify({ status: "success", title: "Despesa adicionada", description: `${count} lançamento(s) salvos.` });
     }
 
@@ -384,13 +563,14 @@ export default function Dashboard({ user, onUserUpdate, onLogout }) {
     setExpenseTab(0);
     setForm({
       name: expense.name,
-      category: expense.category || "Outros",
+      category: getCanonicalCategory(expense.category),
       value: expense.value,
       dueDate: expense.dueDate,
       installment: expense.installment || "",
       status: expense.status || "aguardando",
       debtBalance: expense.debtBalance || "",
       note: expense.note || "",
+      seriesId: expense.seriesId || "",
     });
     expenseModal.onOpen();
   }
@@ -407,8 +587,15 @@ export default function Dashboard({ user, onUserUpdate, onLogout }) {
   }
 
   function deleteExpense(id) {
-    persistExpenses(expenses.filter((expense) => expense.id !== id));
-    notify({ status: "info", title: "Despesa excluída" });
+    const expense = expenses.find((item) => item.id === id);
+    setConfirmation({
+      type: "delete",
+      id,
+      name: expense?.name || "esta despesa",
+      expense,
+      deleteSeries: false,
+      hasSeries: isSeriesExpense(expense),
+    });
   }
 
   function updateStatus(id, status) {
@@ -434,22 +621,129 @@ export default function Dashboard({ user, onUserUpdate, onLogout }) {
   }
 
   function clearMonth() {
-    persistExpenses([]);
-    notify({ status: "info", title: "Mês limpo", description: `${monthLabel} ficou sem despesas.` });
+    setConfirmation({ type: "clear" });
   }
 
-  function copyToNextMonth() {
+  async function confirmDestructiveAction() {
+    setDestructiveLoading(true);
+    try {
+      if (confirmation?.type === "delete" && confirmation.deleteSeries && confirmation.expense) {
+        const removed = await deleteExpenseSeries(confirmation.expense);
+        notify({ status: "info", title: "Dívida completa excluída", description: `${removed} lançamento(s) relacionado(s) foram removidos.` });
+      } else if (confirmation?.type === "delete") {
+        await persistExpenses(expenses.filter((expense) => expense.id !== confirmation.id));
+        notify({ status: "info", title: "Despesa excluída somente deste mês" });
+      } else if (confirmation?.type === "clear") {
+        await persistExpenses([]);
+        notify({ status: "info", title: "Mês limpo", description: `${monthLabel} ficou sem despesas.` });
+      }
+      setConfirmation(null);
+    } catch (error) {
+      notify({ status: "error", title: "Não foi possível excluir", description: error.message });
+    } finally {
+      setDestructiveLoading(false);
+    }
+  }
+
+  async function deleteExpenseSeries(referenceExpense) {
+    const loadedMonths = user.legacy ? getAllLocalFinanceMonths(user.email) : await loadAllFinanceMonths(user);
+    const monthsByPeriod = new Map(loadedMonths.map((entry) => [`${entry.year}-${entry.month}`, entry]));
+    monthsByPeriod.set(`${selected.year}-${selected.month}`, { year: selected.year, month: selected.month, salary, expenses });
+    let removedCount = 0;
+
+    for (const monthData of monthsByPeriod.values()) {
+      const nextExpenses = monthData.expenses.filter((candidate) => {
+        const matches = isExpenseInSeries(candidate, referenceExpense);
+        if (matches) removedCount += 1;
+        return !matches;
+      });
+      if (nextExpenses.length === monthData.expenses.length) continue;
+
+      saveExpenses(user.email, monthData.year, monthData.month, nextExpenses);
+      if (!user.legacy) await saveFinanceMonth(user.id, monthData.year, monthData.month, monthData.salary, nextExpenses);
+      if (monthData.year === selected.year && monthData.month === selected.month) {
+        expensesRef.current = nextExpenses;
+        setExpenses(nextExpenses);
+      }
+    }
+
+    return removedCount;
+  }
+
+  async function repairStalledInstallments() {
+    const months = user.legacy ? getAllLocalFinanceMonths(user.email) : await loadAllFinanceMonths(user);
+    const groups = new Map();
+
+    months.forEach((monthData) => {
+      monthData.expenses.forEach((expense) => {
+        const progress = parseInstallmentLabel(expense.installment);
+        if (!progress) return;
+        const identity = expense.seriesId
+          ? `series:${expense.seriesId}`
+          : `legacy:${getInstallmentSeriesIdentity(expense)}`;
+        if (!identity || identity === "legacy:") return;
+        const entries = groups.get(identity) || [];
+        entries.push({ monthData, expense, progress });
+        groups.set(identity, entries);
+      });
+    });
+
+    const changesByPeriod = new Map();
+    for (const entries of groups.values()) {
+      if (entries.length < 2) continue;
+      entries.sort((a, b) => a.monthData.year - b.monthData.year || a.monthData.month - b.monthData.month);
+      const totals = new Set(entries.map((entry) => entry.progress.total));
+      const currents = new Set(entries.map((entry) => entry.progress.current));
+      if (totals.size !== 1 || currents.size !== 1) continue;
+
+      const first = entries[0];
+      if (first.progress.current >= first.progress.total) continue;
+      entries.forEach((entry) => {
+        const offset = (entry.monthData.year - first.monthData.year) * 12 + entry.monthData.month - first.monthData.month;
+        const expected = first.progress.current + offset;
+        const period = `${entry.monthData.year}-${entry.monthData.month}`;
+        const change = changesByPeriod.get(period) || { monthData: entry.monthData, updates: new Map(), removals: new Set() };
+        if (expected > first.progress.total) change.removals.add(String(entry.expense.id));
+        else if (expected !== entry.progress.current) change.updates.set(String(entry.expense.id), `${expected}/${first.progress.total}`);
+        changesByPeriod.set(period, change);
+      });
+    }
+
+    for (const change of changesByPeriod.values()) {
+      const nextExpenses = change.monthData.expenses
+        .filter((expense) => !change.removals.has(String(expense.id)))
+        .map((expense) => change.updates.has(String(expense.id))
+          ? { ...expense, installment: change.updates.get(String(expense.id)) }
+          : expense);
+      saveExpenses(user.email, change.monthData.year, change.monthData.month, nextExpenses);
+      if (!user.legacy) await saveFinanceMonth(user.id, change.monthData.year, change.monthData.month, change.monthData.salary, nextExpenses);
+      if (change.monthData.year === selected.year && change.monthData.month === selected.month) {
+        expensesRef.current = nextExpenses;
+        setExpenses(nextExpenses);
+      }
+    }
+  }
+
+  async function copyToNextMonth() {
     if (expenses.length === 0) {
       notify({ status: "warning", title: "Nada para copiar" });
       return;
     }
 
     const next = getNextMonth(selected.year, selected.month);
-    const nextExpenses = getExpenses(user.email, next.year, next.month);
+    const nextMonthData = user.legacy
+      ? { salary: getSalary(user.email, next.year, next.month), expenses: getExpenses(user.email, next.year, next.month) }
+      : await loadFinanceMonth(user, next.year, next.month);
+    const nextExpenses = nextMonthData.expenses;
     const nextMonthLabel = formatMonthYear(next.year, next.month);
     const copied = expenses
       .filter((expense) => !nextExpenses.some((nextExpense) => isSameCopiedExpense(expense, nextExpense)))
-      .map((expense, index) => ({ ...expense, id: Date.now() + index, status: "aguardando" }));
+      .map((expense, index) => ({
+        ...expense,
+        id: Date.now() + index,
+        status: "aguardando",
+        installment: getNextInstallment(expense.installment),
+      }));
 
     if (copied.length === 0) {
       notify({
@@ -461,10 +755,9 @@ export default function Dashboard({ user, onUserUpdate, onLogout }) {
     }
 
     saveExpenses(user.email, next.year, next.month, [...nextExpenses, ...copied]);
-
-    if (!getSalary(user.email, next.year, next.month)) {
-      saveSalary(user.email, next.year, next.month, salary);
-    }
+    const nextSalary = nextMonthData.salary || salary;
+    saveSalary(user.email, next.year, next.month, nextSalary);
+    if (!user.legacy) await saveFinanceMonth(user.id, next.year, next.month, nextSalary, [...nextExpenses, ...copied]);
 
     notify({
       status: "success",
@@ -502,7 +795,7 @@ export default function Dashboard({ user, onUserUpdate, onLogout }) {
 
   function getExpenseStatusView(expense) {
     if (expense.status === "pago") {
-      return { label: "Pago", colorScheme: "mint", bg: "mint.100", color: "mint.800" };
+      return { label: "Pago", ...paidStatus };
     }
 
     const hasDueDate = expense.dueDate !== "";
@@ -512,19 +805,15 @@ export default function Dashboard({ user, onUserUpdate, onLogout }) {
       expense.status === "atrasado" || (hasDueDate && expense.status !== "pago" && (isPastMonth || (isCurrentMonth && Number(expense.dueDate) < today)));
 
     if (isOverdue) {
-      return { label: "Atrasado", colorScheme: "rose", bg: "rose.100", color: "rose.800" };
+      return { label: "Atrasado", ...overdueStatus };
     }
 
-    if (expense.status === "aguardando" && hasDueDate) {
-      return { label: "Em dia", colorScheme: "sky", bg: "sky.100", color: "sky.800" };
-    }
-
-    return { label: "Não pago", colorScheme: "peach", bg: "peach.100", color: "peach.900" };
+    return { label: "Não pago", ...unpaidStatus };
   }
 
   function renderExpenseCell(expense, columnKey, statusView) {
     if (columnKey === "category") {
-      return <Td>{expense.category || "—"}</Td>;
+      return <Td>{getCanonicalCategory(expense.category) || "—"}</Td>;
     }
 
     if (columnKey === "value") {
@@ -554,25 +843,27 @@ export default function Dashboard({ user, onUserUpdate, onLogout }) {
     if (columnKey === "status") {
       return (
         <Td minW="150px">
-          <Stack spacing={1} align="stretch">
-            <Badge alignSelf="flex-start" colorScheme={statusView.colorScheme} borderRadius="full" px={2}>
-              {statusView.label}
-            </Badge>
-            <Select
-              size="sm"
-              value={expense.status || "aguardando"}
-              bg={statusView.bg}
-              color={statusView.color}
-              fontWeight="800"
-              onChange={(event) => updateStatus(expense.id, event.target.value)}
-            >
-              {STATUSES.map((status) => (
-                <option key={status} value={status}>
-                  {STATUS_LABELS[status]}
-                </option>
-              ))}
-            </Select>
-          </Stack>
+          <Select
+            size="sm"
+            value={statusView.label === "Atrasado" ? "atrasado" : expense.status || "aguardando"}
+            variant="outline"
+            bg={statusView.bg}
+            color={statusView.color}
+            iconColor={statusView.color}
+            fontWeight="600"
+            borderColor={statusView.border}
+            borderRadius="full"
+            _hover={{ borderColor: statusView.color }}
+            _focusVisible={{ borderColor: statusView.color, boxShadow: `0 0 0 1px var(--chakra-colors-${colorMode === "dark" ? "whiteAlpha-400" : "gray-300"})` }}
+            sx={{ option: { background: colorMode === "dark" ? "#1A202C" : "white", color: colorMode === "dark" ? "white" : "#1A202C", fontWeight: 400 } }}
+            onChange={(event) => updateStatus(expense.id, event.target.value)}
+          >
+            {STATUSES.map((status) => (
+              <option key={status} value={status}>
+                {STATUS_LABELS[status]}
+              </option>
+            ))}
+          </Select>
         </Td>
       );
     }
@@ -583,44 +874,73 @@ export default function Dashboard({ user, onUserUpdate, onLogout }) {
   const welcomePanel = (
     <HeroCard h="100%" p={{ base: 4, md: 5 }}>
       <Stack spacing={4}>
-        <HStack justify="space-between" align="flex-start" flexWrap="wrap" gap={3}>
-          <Stack spacing={1}>
-            <HStack flexWrap="wrap">
+        <Stack spacing={3} align="center" textAlign="center" minW={0}>
+          <HStack flexWrap="wrap" justify="center">
               <Badge colorScheme="brand" borderRadius="full" px={3} py={1}>
                 Dashboard financeiro
               </Badge>
               <Badge colorScheme={urgency.colorScheme} borderRadius="full" px={3} py={1}>
                 {urgency.label}
               </Badge>
-            </HStack>
-            <Heading size={{ base: "md", md: "lg" }}>Bem-vindo, {user.email}</Heading>
-            <Text color={mutedText} fontSize="sm">
-              {timeLabel}
-            </Text>
-          </Stack>
-          <HStack flexWrap="wrap" justify="flex-end">
+          </HStack>
+          <Heading size={{ base: "md", md: "lg" }} overflowWrap="anywhere">Bem-vindo, {user.username || user.email}</Heading>
+          <Text color={mutedText} fontSize="sm">{timeLabel}</Text>
+          <Box
+            minH="40px"
+            maxW="100%"
+            display="flex"
+            alignItems="center"
+            justifyContent="center"
+            px={4}
+            py={2}
+            bg={userDisplayBg}
+            border="1px solid"
+            borderColor={userDisplayBorder}
+            borderRadius="full"
+            fontWeight="600"
+            textAlign="center"
+            overflowWrap="anywhere"
+          >
+            {user.username || user.email}
+          </Box>
+          <HStack flexWrap="wrap" justify="center" spacing={2}>
+            <IconButton
+              aria-label="Sair"
+              icon={<PowerIcon />}
+              bg={logoutBg}
+              border="1px solid"
+              borderColor={logoutBorder}
+              color={logoutColor}
+              _hover={{ bg: colorMode === "light" ? "rose.100" : "rgba(159, 18, 57, 0.4)" }}
+              onClick={onLogout}
+            />
+            <IconButton
+              aria-label={user.legacy ? "Confirmar atualização" : "Alterar senha"}
+              icon={<EditIcon />}
+              colorScheme="brand"
+              variant="outline"
+              onClick={user.legacy ? legacyModal.onOpen : profileModal.onOpen}
+            />
+            {user.role === "admin" ? (
+              <IconButton
+                aria-label="Abrir área administrativa"
+                icon={<SettingsIcon />}
+                colorScheme="lavender"
+                variant="outline"
+                onClick={adminModal.onOpen}
+              />
+            ) : null}
             <IconButton
               aria-label="Alternar tema"
               icon={colorMode === "light" ? <MoonIcon /> : <SunIcon />}
               variant="outline"
               onClick={toggleColorMode}
             />
-            <Menu>
-              <MenuButton as={Button} colorScheme="brand" variant="outline">
-                {user.email}
-              </MenuButton>
-              <MenuList>
-                <MenuItem onClick={profileModal.onOpen}>Editar usuário e senha</MenuItem>
-                <MenuItem color="rose.500" onClick={onLogout}>
-                  Sair
-                </MenuItem>
-              </MenuList>
-            </Menu>
           </HStack>
-        </HStack>
+        </Stack>
 
         <SimpleGrid columns={{ base: 2, xl: 1 }} spacing={2}>
-          <SummaryCard label="Salario" value={formatMoney(salary)} help={monthLabel} colorScheme="mint" />
+          <SummaryCard label="Salário" value={formatMoney(salary)} help={monthLabel} colorScheme="mint" />
           <SummaryCard label="Gastos" value={formatMoney(summary.total)} help={`${expenses.length} despesa(s)`} colorScheme="peach" />
           <SummaryCard
             label="Saldo previsto"
@@ -628,7 +948,12 @@ export default function Dashboard({ user, onUserUpdate, onLogout }) {
             help={`Dia ${formatMoney(summary.dailyBalance)}`}
             colorScheme={summary.balance >= 0 ? "sky" : "rose"}
           />
-          <SummaryCard label="Dividas totais" value={formatMoney(totalDebtBalance)} help="Renegociar" colorScheme="lavender" />
+          <SummaryCard
+            label="Despesas em aberto"
+            value={formatMoney(unpaidTotal)}
+            help={`Em aberto em ${monthLabel}`}
+            colorScheme="lavender"
+          />
         </SimpleGrid>
       </Stack>
     </HeroCard>
@@ -692,6 +1017,21 @@ export default function Dashboard({ user, onUserUpdate, onLogout }) {
   return (
     <Box minH="100vh" py={{ base: 3, md: 5 }} display="flex" flexDirection="column">
       <Container maxW="1760px" flex="1" w="100%">
+        {user.legacy || legacySummary ? (
+          <HeroCard mb={4} p={{ base: 4, md: 5 }} borderColor="mint.300">
+            <HStack justify="space-between" align="center" flexWrap="wrap" gap={3}>
+              <Box>
+                <Heading size="sm">Atualizamos o White Cat</Heading>
+                <Text color={mutedText} fontSize="sm">
+                  {user.legacy
+                    ? "O app foi atualizado. Confirme seu acesso para usar o White Cat em qualquer lugar e dispositivo."
+                    : `Encontramos ${legacySummary.months} mês(es) salvo(s) neste navegador. Confirme seus dados antigos para preservar as planilhas.`}
+                </Text>
+              </Box>
+              <Button colorScheme="mint" onClick={legacyModal.onOpen}>{user.legacy ? "Continuar atualização" : "Salvar minhas planilhas"}</Button>
+            </HStack>
+          </HeroCard>
+        ) : null}
         <Grid
           templateColumns={{ base: "1fr", xl: "minmax(230px, 300px) minmax(0, 1fr) minmax(230px, 300px)" }}
           gap={4}
@@ -729,6 +1069,7 @@ export default function Dashboard({ user, onUserUpdate, onLogout }) {
                       <option value="valueDesc">Ordenar: maior valor</option>
                       <option value="valueAsc">Ordenar: menor valor</option>
                       <option value="status">Ordenar: status</option>
+                      <option value="category">Ordenar: categoria</option>
                       <option value="manual">Ordenar: manual</option>
                     </Select>
                     <Select
@@ -776,7 +1117,7 @@ export default function Dashboard({ user, onUserUpdate, onLogout }) {
                             <Text fontWeight="800" noOfLines={1}>
                               {getDisplayExpenseName(expense)}
                             </Text>
-                            <Badge colorScheme={statusView.colorScheme} borderRadius="full" px={2} mt={1}>
+                            <Badge bg={statusView.bg} color={statusView.color} borderRadius="full" px={2} mt={1}>
                               {statusView.label}
                             </Badge>
                           </Box>
@@ -895,9 +1236,13 @@ export default function Dashboard({ user, onUserUpdate, onLogout }) {
                       <FormLabel>Descrição</FormLabel>
                       <Input value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} />
                     </FormControl>
-                    <FormControl>
+                    <FormControl isRequired>
                       <FormLabel>Categoria</FormLabel>
-                      <Select value={form.category} onChange={(event) => setForm({ ...form, category: event.target.value })}>
+                      <Select
+                        value={form.category}
+                        placeholder="Selecione uma categoria"
+                        onChange={(event) => setForm({ ...form, category: event.target.value })}
+                      >
                         {CATEGORIES.map((category) => (
                           <option key={category} value={category}>
                             {category}
@@ -927,7 +1272,8 @@ export default function Dashboard({ user, onUserUpdate, onLogout }) {
                     <SimpleGrid columns={{ base: 1, md: 2 }} spacing={3}>
                       <FormControl>
                         <FormLabel>Parcela</FormLabel>
-                        <Input placeholder="12 ou 1/12" value={form.installment} onChange={(event) => setForm({ ...form, installment: event.target.value })} />
+                        <Input placeholder="12 ou 5/12" value={form.installment} onChange={(event) => setForm({ ...form, installment: event.target.value })} />
+                        <Text color={softText} fontSize="xs" mt={1}>Se algumas parcelas já foram pagas, informe a atual. Exemplo: 5/12.</Text>
                       </FormControl>
                       <FormControl>
                         <FormLabel>Status</FormLabel>
@@ -986,7 +1332,12 @@ export default function Dashboard({ user, onUserUpdate, onLogout }) {
                             <Tr key={index}>
                               <Td><Input size="sm" value={row.name} onChange={(event) => updateBulkRow(index, { name: event.target.value })} /></Td>
                               <Td>
-                                <Select size="sm" value={row.category} onChange={(event) => updateBulkRow(index, { category: event.target.value })}>
+                                <Select
+                                  size="sm"
+                                  value={row.category}
+                                  placeholder="Categoria"
+                                  onChange={(event) => updateBulkRow(index, { category: event.target.value })}
+                                >
                                   {CATEGORIES.map((category) => <option key={category} value={category}>{category}</option>)}
                                 </Select>
                               </Td>
@@ -1034,18 +1385,16 @@ export default function Dashboard({ user, onUserUpdate, onLogout }) {
       <Modal isOpen={profileModal.isOpen} onClose={profileModal.onClose} isCentered>
         <ModalOverlay />
         <ModalContent borderRadius="24px">
-          <ModalHeader>Editar usuário</ModalHeader>
+          <ModalHeader>Alterar senha</ModalHeader>
           <ModalCloseButton />
           <ModalBody>
             <Stack as="form" id="profile-form" spacing={4} onSubmit={handleProfileSubmit}>
-              <FormControl>
-                <FormLabel>Usuário</FormLabel>
-                <Input value={profileForm.email} onChange={(event) => setProfileForm({ ...profileForm, email: event.target.value })} />
-              </FormControl>
-              <FormControl>
-                <FormLabel>Senha</FormLabel>
+              <FormControl isRequired>
+                <FormLabel>Nova senha</FormLabel>
                 <Input
                   type="password"
+                  minLength={6}
+                  placeholder="Pelo menos 6 caracteres"
                   value={profileForm.password}
                   onChange={(event) => setProfileForm({ ...profileForm, password: event.target.value })}
                 />
@@ -1057,13 +1406,163 @@ export default function Dashboard({ user, onUserUpdate, onLogout }) {
               Cancelar
             </Button>
             <Button type="submit" form="profile-form" colorScheme="brand">
-              Salvar usuário
+              Salvar nova senha
             </Button>
           </ModalFooter>
         </ModalContent>
       </Modal>
+
+      <Modal
+        isOpen={legacyModal.isOpen}
+        onClose={legacyModal.onClose}
+        isCentered
+        closeOnOverlayClick={false}
+        closeOnEsc={false}
+      >
+        <ModalOverlay />
+        <ModalContent borderRadius="24px">
+          <ModalHeader>Atualizamos nosso app</ModalHeader>
+          <ModalBody>
+            <Stack
+              as="form"
+              id="legacy-migration-form"
+              spacing={4}
+              onSubmit={user.legacy ? upgradeLegacyAccount : handleLegacyMigration}
+            >
+              <Box bg={subtleBg} borderRadius="18px" p={4}>
+                <Text fontWeight="700" mb={1}>O White Cat foi atualizado!</Text>
+                <Text color={mutedText} fontSize="sm">
+                  Agora você pode acessar sua planilha de qualquer lugar e em qualquer dispositivo usando seu usuário e senha. Para continuar, entre novamente com os dados que já utiliza.
+                </Text>
+              </Box>
+              <FormControl isRequired>
+                <FormLabel>Usuário</FormLabel>
+                <Input autoFocus value={legacyForm.username} onChange={(event) => setLegacyForm({ ...legacyForm, username: event.target.value })} />
+              </FormControl>
+              <FormControl isRequired>
+                <FormLabel>Senha</FormLabel>
+                <InputGroup>
+                  <Input
+                    type={showLegacyPassword ? "text" : "password"}
+                    value={legacyForm.password}
+                    onChange={(event) => setLegacyForm({ ...legacyForm, password: event.target.value })}
+                    pr="3rem"
+                  />
+                  <InputRightElement>
+                    <IconButton
+                      aria-label={showLegacyPassword ? "Ocultar senha" : "Mostrar senha salva"}
+                      icon={showLegacyPassword ? <ViewOffIcon /> : <ViewIcon />}
+                      size="sm"
+                      variant="ghost"
+                      type="button"
+                      onClick={() => setShowLegacyPassword((current) => !current)}
+                    />
+                  </InputRightElement>
+                </InputGroup>
+              </FormControl>
+            </Stack>
+          </ModalBody>
+          <ModalFooter>
+            <Button variant="ghost" mr={3} onClick={legacyModal.onClose} isDisabled={migratingLegacy}>Cancelar</Button>
+            <Button type="submit" form="legacy-migration-form" colorScheme="mint" isLoading={migratingLegacy}>
+              Salvar
+            </Button>
+          </ModalFooter>
+        </ModalContent>
+      </Modal>
+
+      <Modal isOpen={migrationSuccessModal.isOpen} onClose={migrationSuccessModal.onClose} isCentered closeOnOverlayClick={false} closeOnEsc={false}>
+        <ModalOverlay />
+        <ModalContent borderRadius="24px" textAlign="center">
+          <ModalBody py={8}>
+            <Text fontSize="5xl" mb={3}>🎉</Text>
+            <Heading size="lg" mb={3}>PRONTO!</Heading>
+            <Text color={mutedText} fontSize="lg">Sua planilha White Cat está com você em todo lugar agora!</Text>
+          </ModalBody>
+          <ModalFooter justifyContent="center" pt={0} pb={6}>
+            <Button colorScheme="mint" minW="140px" onClick={migrationSuccessModal.onClose}>OK</Button>
+          </ModalFooter>
+        </ModalContent>
+      </Modal>
+
+      {user.role === "admin" ? <AdminDashboard isOpen={adminModal.isOpen} onClose={adminModal.onClose} /> : null}
+
+      <AlertDialog
+        isOpen={Boolean(confirmation)}
+        leastDestructiveRef={cancelConfirmationRef}
+        onClose={() => setConfirmation(null)}
+        isCentered
+      >
+        <AlertDialogOverlay>
+          <AlertDialogContent borderRadius="24px">
+            <AlertDialogHeader fontSize="lg" fontWeight="800">
+              {confirmation?.type === "clear"
+                ? "Limpar todas as despesas do mês?"
+                : confirmation?.deleteSeries
+                  ? "Excluir a dívida completa?"
+                  : "Excluir esta despesa?"}
+            </AlertDialogHeader>
+            <AlertDialogBody>
+              <Stack spacing={4}>
+                <Text>
+                  {confirmation?.type === "clear"
+                    ? `Todas as despesas de ${monthLabel} serão removidas. Esta ação não pode ser desfeita.`
+                    : confirmation?.deleteSeries
+                      ? `Todas as parcelas ou recorrências relacionadas a “${confirmation?.name || "Despesa"}” serão removidas de todos os meses.`
+                      : `“${confirmation?.name || "Despesa"}” será removida somente de ${monthLabel}.`}
+                </Text>
+                {confirmation?.type === "delete" && confirmation.hasSeries ? (
+                  <Checkbox
+                    colorScheme="rose"
+                    isChecked={confirmation.deleteSeries}
+                    onChange={(event) => setConfirmation((current) => ({ ...current, deleteSeries: event.target.checked }))}
+                  >
+                    Excluir dívida completa de todos os meses
+                  </Checkbox>
+                ) : null}
+                <Text color={softText} fontSize="sm">Esta ação não pode ser desfeita.</Text>
+              </Stack>
+            </AlertDialogBody>
+            <AlertDialogFooter>
+              <Button ref={cancelConfirmationRef} onClick={() => setConfirmation(null)}>
+                Cancelar
+              </Button>
+              <Button colorScheme="rose" onClick={confirmDestructiveAction} ml={3} isLoading={destructiveLoading}>
+                {confirmation?.type === "clear" ? "Limpar mês" : confirmation?.deleteSeries ? "Excluir tudo" : "Excluir deste mês"}
+              </Button>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialogOverlay>
+      </AlertDialog>
     </Box>
   );
+}
+
+function isSeriesExpense(expense) {
+  if (!expense) return false;
+  return Boolean(
+    String(expense.seriesId || "").trim()
+    || getInstallmentSeriesIdentity(expense)
+    || getRecurringSeriesIdentity(expense),
+  );
+}
+
+function getAccountUpgradeErrorMessage(error) {
+  if (String(error?.message || "").toLowerCase().includes("email signups are disabled")) {
+    return "No Supabase, habilite o provedor Email e novos cadastros, mas deixe Confirm email desativado. O White Cat continuará pedindo somente usuário e senha.";
+  }
+  return error?.message || "Não foi possível criar a conta online.";
+}
+
+function isExpenseInSeries(candidate, reference) {
+  const referenceSeriesId = String(reference?.seriesId || "").trim();
+  if (referenceSeriesId) return String(candidate?.seriesId || "").trim() === referenceSeriesId;
+
+  const installmentIdentity = getInstallmentSeriesIdentity(reference);
+  if (installmentIdentity) return getInstallmentSeriesIdentity(candidate) === installmentIdentity;
+
+  const recurringIdentity = getRecurringSeriesIdentity(reference);
+  return Boolean(recurringIdentity && getRecurringSeriesIdentity(candidate) === recurringIdentity);
 }
 
 function isSameCopiedExpense(source, target) {
@@ -1074,6 +1573,19 @@ function isSameCopiedExpense(source, target) {
   const sourceSeries = getInstallmentSeriesIdentity(source);
   const targetSeries = getInstallmentSeriesIdentity(target);
   return Boolean(sourceSeries && targetSeries && sourceSeries === targetSeries);
+}
+
+function getNextInstallment(value) {
+  const text = String(value || "").trim();
+  const match = text.match(/^(\d+)\s*\/\s*(\d+)$/);
+
+  if (!match) {
+    return text;
+  }
+
+  const current = Number(match[1]);
+  const total = Number(match[2]);
+  return current < total ? `${current + 1}/${total}` : text;
 }
 
 function getDisplayExpenseName(expense) {
@@ -1117,6 +1629,19 @@ function getInstallmentSeriesIdentity(expense) {
   ].join("|");
 }
 
+function parseInstallmentLabel(value) {
+  const match = String(value || "").trim().match(/^(\d+)\s*(?:\/|de)\s*(\d+)$/i);
+  if (!match) return null;
+
+  const current = Number(match[1]);
+  const total = Number(match[2]);
+  if (!Number.isInteger(current) || !Number.isInteger(total) || current < 1 || total < 2 || current > total) {
+    return null;
+  }
+
+  return { current, total };
+}
+
 function normalizeIdentityText(value) {
   return String(value || "")
     .trim()
@@ -1132,6 +1657,25 @@ function toMoneyCents(value) {
 
 function escapeRegExp(value) {
   return String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function getRecurringSeriesIdentity(expense) {
+  if (!normalizeIdentityText(expense?.note).includes("recorrente")) return "";
+  return [
+    normalizeIdentityText(expense?.name),
+    normalizeIdentityText(expense?.category || "Outros"),
+    toMoneyCents(expense?.value),
+    Number(expense?.dueDate || 0),
+  ].join("|");
+}
+
+function PowerIcon(props) {
+  return (
+    <Icon viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" {...props}>
+      <path d="M12 2v10" />
+      <path d="M6.34 4.93a8 8 0 1 0 11.32 0" />
+    </Icon>
+  );
 }
 
 function SummaryCard({ label, value, help, colorScheme = "brand" }) {

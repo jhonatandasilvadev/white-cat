@@ -1,95 +1,28 @@
 export const MONTHS = ["Jan", "Fev", "Mar", "Abr", "Mai", "Jun", "Jul", "Ago", "Set", "Out", "Nov", "Dez"];
 
 export const CATEGORIES = [
-  "Moradia",
-  "Aluguel",
-  "Condominio",
-  "Financiamento",
-  "Financiamento imobiliario",
-  "Financiamento veiculo",
-  "Agua",
-  "Luz",
-  "Gas",
-  "Internet",
-  "Telefone",
-  "Celular",
-  "TV e streaming",
-  "Casa",
-  "Moveis",
-  "Eletrodomesticos",
-  "Manutencao residencial",
-  "Limpeza",
-  "Transporte",
-  "Carro",
-  "Moto",
-  "Gasolina",
-  "Etanol",
-  "Diesel",
-  "Estacionamento",
-  "Pedagio",
-  "Seguro veiculo",
-  "IPVA",
-  "Licenciamento",
-  "Multas",
-  "Manutencao veiculo",
-  "Mecanico",
-  "Pneus",
-  "Uber e taxi",
-  "Transporte publico",
-  "Alimentacao",
-  "Mercado",
-  "Feira",
-  "Padaria",
-  "Restaurante",
-  "Delivery",
-  "Lanches",
-  "Saude",
-  "Hospital",
-  "Consulta medica",
-  "Exames",
-  "Remedios",
-  "Farmacia",
-  "Plano de saude",
-  "Dentista",
-  "Psicologo",
-  "Academia",
-  "Bem-estar",
-  "Educacao",
-  "Escola",
-  "Faculdade",
-  "Cursos",
-  "Livros",
-  "Material escolar",
-  "Filhos",
-  "Creche",
-  "Pets",
-  "Racao",
-  "Veterinario",
-  "Higiene pet",
-  "Roupas",
-  "Calcados",
-  "Beleza",
-  "Barbearia",
-  "Salao",
-  "Viagem",
-  "Hospedagem",
-  "Passagens",
-  "Lazer",
-  "Assinaturas",
-  "Presentes",
-  "Doacoes",
-  "Impostos",
-  "Taxas",
-  "Banco",
-  "Cartao de credito",
-  "Emprestimo",
-  "Dividas",
-  "Investimentos",
-  "Seguro",
-  "Emergencia",
-  "Trabalho",
-  "Outros",
-];
+  "Moradia", "Aluguel", "Condomínio", "Financiamento", "Financiamento imobiliário", "Financiamento veículo",
+  "Água", "Luz", "Gás", "Internet", "Telefone", "Celular", "TV e streaming", "Casa", "Móveis",
+  "Eletrodomésticos", "Manutenção residencial", "Limpeza", "Transporte", "Carro", "Moto", "Gasolina",
+  "Etanol", "Diesel", "Estacionamento", "Pedágio", "Seguro veículo", "IPVA", "Licenciamento", "Multas",
+  "Manutenção veículo", "Mecânico", "Pneus", "Uber e táxi", "Transporte público", "Alimentação", "Mercado",
+  "Feira", "Padaria", "Restaurante", "Delivery", "Lanches", "Saúde", "Hospital", "Consulta médica", "Exames",
+  "Remédios", "Farmácia", "Plano de saúde", "Dentista", "Psicólogo", "Academia", "Bem-estar", "Educação",
+  "Escola", "Faculdade", "Cursos", "Livros", "Material escolar", "Filhos", "Creche", "Pets", "Ração",
+  "Veterinário", "Higiene pet", "Roupas", "Calçados", "Beleza", "Barbearia", "Salão", "Viagem",
+  "Hospedagem", "Passagens", "Lazer", "Assinaturas", "Presentes", "Doações", "Impostos", "Taxas", "Banco",
+  "Cartão de crédito", "Empréstimo", "Dívidas", "Investimentos", "Seguro", "Emergência", "Trabalho", "Outros",
+].sort((a, b) => a.localeCompare(b, "pt-BR"));
+
+export function getCanonicalCategory(value) {
+  const category = String(value || "").trim();
+  if (!category) {
+    return "Outros";
+  }
+
+  const normalized = normalizeText(category);
+  return CATEGORIES.find((item) => normalizeText(item) === normalized) || category;
+}
 
 export const STATUSES = ["aguardando", "pago", "atrasado"];
 
@@ -168,4 +101,11 @@ export function sortExpenses(expenses) {
     const bDue = b.dueDate === "" ? 99 : Number(b.dueDate);
     return aDue - bDue;
   });
+}
+
+function normalizeText(value) {
+  return String(value)
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLocaleLowerCase("pt-BR");
 }

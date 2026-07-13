@@ -1,4 +1,4 @@
-import { getBrasiliaDate, getNextMonth, STATUSES } from "./finance.js";
+import { getBrasiliaDate, getCanonicalCategory, STATUSES } from "./finance.js";
 
 export const FIXED_RECURRENCE_MONTHS = 24;
 
@@ -41,10 +41,16 @@ export function normalizeStatus(value) {
 }
 
 export function getInstallmentCount(value) {
+  return getInstallmentProgress(value)?.total || 0;
+}
+
+export function getInstallmentProgress(value) {
   const text = String(value || "").trim();
-  const match = text.match(/(?:\d+\s*\/\s*)?(\d+)/);
-  const count = match ? Number(match[1]) : 0;
-  return Number.isInteger(count) && count > 1 ? count : 0;
+  const progressMatch = text.match(/^(\d+)\s*(?:\/|de)\s*(\d+)$/i);
+  const current = progressMatch ? Number(progressMatch[1]) : 1;
+  const total = progressMatch ? Number(progressMatch[2]) : Number(text);
+  if (!Number.isInteger(current) || !Number.isInteger(total) || total < 2 || current < 1 || current > total) return null;
+  return { current, total };
 }
 
 export function parseDueDateValue(value, selected, today = getBrasiliaDate()) {
@@ -70,9 +76,7 @@ export function parseDueDateValue(value, selected, today = getBrasiliaDate()) {
   }
 
   const day = Number(dayMatch[1]);
-  const selectedIsCurrent = selected.year === today.getFullYear() && selected.month === today.getMonth() + 1;
-  const target = selectedIsCurrent && day < today.getDate() ? getNextMonth(selected.year, selected.month) : selected;
-  return buildDueDate(day, target.month, target.year);
+  return buildDueDate(day, selected.month, selected.year);
 }
 
 export function validateExpenseDraft(draft) {
@@ -86,6 +90,9 @@ export function validateExpenseDraft(draft) {
   if (!draft.dueDate || Number(draft.dueDate) < 1 || Number(draft.dueDate) > 31) {
     errors.push("Vencimento obrigatório");
   }
+  if (String(draft.installment || "").trim() && !getInstallmentProgress(draft.installment)) {
+    errors.push("Parcela inválida. Use 12 ou 5/12");
+  }
   return errors;
 }
 
@@ -93,7 +100,7 @@ export function normalizeExpenseDraft(draft, selected) {
   const due = parseDueDateValue(draft.dueDate, selected);
   return {
     name: String(draft.name || "").trim(),
-    category: draft.category || "Outros",
+    category: getCanonicalCategory(draft.category),
     value: parseMoneyValue(draft.value),
     dueDate: due?.day || "",
     dueYear: due?.year || selected.year,
@@ -102,6 +109,7 @@ export function normalizeExpenseDraft(draft, selected) {
     status: normalizeStatus(draft.status),
     debtBalance: draft.debtBalance === "" || draft.debtBalance === undefined ? "" : parseMoneyValue(draft.debtBalance),
     note: String(draft.note || "").trim(),
+    seriesId: String(draft.seriesId || "").trim(),
   };
 }
 
@@ -116,33 +124,39 @@ export function makeExpense(draft, id) {
     status: draft.status || "aguardando",
     debtBalance: draft.debtBalance === "" ? "" : Number(draft.debtBalance || 0),
     note: draft.note || "",
+    seriesId: draft.seriesId || "",
   };
 }
 
 export function generateInstallmentDrafts(baseDraft, selected) {
   const normalized = normalizeExpenseDraft(baseDraft, selected);
-  const count = getInstallmentCount(baseDraft.installment);
+  const seriesId = normalized.seriesId || createSeriesId();
+  const progress = getInstallmentProgress(baseDraft.installment);
   const debtTotal = parseMoneyValue(baseDraft.debtBalance);
 
-  if (!count || debtTotal <= 0) {
+  if (!progress) {
     return [normalized];
   }
 
-  const installmentValue = roundMoney(debtTotal / count);
-  return Array.from({ length: count }, (_, index) => {
+  const installmentValue = debtTotal > 0 ? roundMoney(debtTotal / progress.total) : normalized.value;
+  const remainingCount = progress.total - progress.current + 1;
+  return Array.from({ length: remainingCount }, (_, index) => {
     const target = addMonths(normalized.dueYear, normalized.dueMonth, index);
     return {
       ...normalized,
       value: installmentValue,
       dueYear: target.year,
       dueMonth: target.month,
-      installment: `${index + 1}/${count}`,
+      installment: `${progress.current + index}/${progress.total}`,
+      status: index === 0 ? normalized.status : "aguardando",
+      seriesId,
     };
   });
 }
 
 export function generateRecurringDrafts(baseDraft, selected, options) {
   const normalized = normalizeExpenseDraft(baseDraft, selected);
+  const seriesId = normalized.seriesId || createSeriesId();
   const count = options.fixed ? FIXED_RECURRENCE_MONTHS : Math.max(1, Number(options.months || 1));
 
   return Array.from({ length: count }, (_, index) => {
@@ -152,8 +166,13 @@ export function generateRecurringDrafts(baseDraft, selected, options) {
       dueYear: target.year,
       dueMonth: target.month,
       note: [normalized.note, options.fixed ? "Recorrente fixa" : ""].filter(Boolean).join(" - "),
+      seriesId,
     };
   });
+}
+
+function createSeriesId() {
+  return globalThis.crypto?.randomUUID?.() || `series-${Date.now()}-${Math.random().toString(36).slice(2)}`;
 }
 
 export function parseTextExpenses(text, selected) {

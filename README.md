@@ -1,26 +1,26 @@
 # White Cat Finance App
 
-Aplicativo financeiro React/Vite para rodar localmente. Os dados ficam no `localStorage` do navegador, sem backend externo.
+Aplicativo financeiro React/Vite com autenticação, sincronização em nuvem e isolamento de dados por usuário usando Supabase.
 
-## Rodar local
+## Configuração
+
+1. Copie `.env.example` para `.env.local` e preencha as variáveis públicas do Supabase.
+2. Execute `supabase/schema.sql` no SQL Editor do projeto Supabase.
+3. Consulte `SUPABASE_SETUP.md` para configurar autenticação e Netlify.
+
+## Rodar localmente
 
 ```bash
 npm install
-npm run local
+npm run dev
 ```
 
 Abra `http://127.0.0.1:5173/`.
 
-Usuário inicial:
-
-- Usuário: `john`
-- Senha: `Casinha123!`
-
-## Build local
+## Build
 
 ```bash
 npm run build
-npm run preview
 ```
 
-O preview abre em `http://127.0.0.1:4173/`. O build usa caminhos relativos para funcionar também em subpastas locais.
+O cadastro e o acesso usam somente usuário e senha. Contas antigas continuam entrando normalmente e confirmam as mesmas credenciais uma única vez para sincronizar os dados. As senhas são administradas pelo Supabase Auth e nunca são exibidas pelo aplicativo.
